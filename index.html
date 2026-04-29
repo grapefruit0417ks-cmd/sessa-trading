@@ -1,0 +1,2385 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="theme-color" content="#09090b" />
+  <title>SESSA Trading</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700;900&display=swap" rel="stylesheet">
+
+  <!-- Tailwind CSS (CDN) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- React + ReactDOM(production版) -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+
+  <!-- Babel (JSX変換) -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <style>
+    html, body {
+      background: #09090b;
+      margin: 0;
+      padding: 0;
+      overscroll-behavior: none;
+      -webkit-tap-highlight-color: transparent;
+    }
+    body {
+      font-family: 'JetBrains Mono', 'Courier New', monospace;
+    }
+    /* ローディング表示 */
+    #loading {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #09090b;
+      color: #fbbf24;
+      font-family: 'JetBrains Mono', monospace;
+      z-index: 9999;
+      letter-spacing: 0.3em;
+      font-size: 12px;
+    }
+    .dots::after {
+      content: '';
+      animation: dots 1.5s steps(4) infinite;
+    }
+    @keyframes dots {
+      0%   { content: ''; }
+      25%  { content: '.'; }
+      50%  { content: '..'; }
+      75%  { content: '...'; }
+      100% { content: ''; }
+    }
+    @keyframes toastIn {
+      0%   { transform: translateY(-20px); opacity: 0; }
+      100% { transform: translateY(0); opacity: 1; }
+    }
+    @keyframes unlockFadeIn {
+      0%   { opacity: 0; }
+      100% { opacity: 1; }
+    }
+    @keyframes unlockShake {
+      0%, 100% { transform: translateX(0); }
+      10%, 30%, 50%, 70% { transform: translateX(-4px); }
+      20%, 40%, 60%, 80% { transform: translateX(4px); }
+      90% { transform: translateX(-2px); }
+    }
+  </style>
+</head>
+<body>
+  <div id="loading">
+    <span>SYSTEM LOADING<span class="dots"></span></span>
+  </div>
+  <div id="root"></div>
+
+  <script type="text/babel" data-presets="react">
+    const { useState, useEffect, useRef } = React;
+
+    // ===== 自作SVGチャート =====
+    // series: [{ key, color, highlight }, ...] でマルチシリーズ表示
+    // 後方互換性: dataKey + color を渡すとシングルシリーズとして動作
+    function SimpleChart({ data, dataKey, color, series, refLine, height = 200, compact = false }) {
+      const containerRef = useRef(null);
+      const [width, setWidth] = useState(360);
+
+      useEffect(() => {
+        const el = containerRef.current;
+        if (!el) return;
+        const update = () => {
+          const w = el.getBoundingClientRect().width;
+          if (w > 0) setWidth(Math.floor(w));
+        };
+        update();
+        const ro = new ResizeObserver(update);
+        ro.observe(el);
+        return () => ro.disconnect();
+      }, []);
+
+      // シリーズ正規化:singleでもmultiでも同じ形式に
+      const seriesList = series && series.length > 0
+        ? series
+        : [{ key: dataKey, color: color, highlight: true }];
+
+      if (!data || data.length < 2) {
+        return (
+          <div ref={containerRef} style={{ height }} className="flex items-center justify-center text-zinc-700 text-xs">
+            データ収集中...
+          </div>
+        );
+      }
+
+      // 全シリーズの値を集めて min/max を算出
+      let allValues = [];
+      seriesList.forEach(s => {
+        data.forEach(d => {
+          if (d[s.key] !== undefined) allValues.push(d[s.key]);
+        });
+      });
+      if (refLine) allValues.push(refLine);
+
+      const min = Math.min(...allValues);
+      const max = Math.max(...allValues);
+      const range = max - min || 1;
+      const padding = range * 0.1;
+      const chartMin = min - padding;
+      const chartMax = max + padding;
+      const chartRange = chartMax - chartMin;
+
+      const w = width;
+      const h = height;
+      const padX = compact ? 4 : 44;
+      const padY = 12;
+      const innerW = w - padX - 8;
+      const innerH = h - padY * 2;
+
+      const toY = (v) => padY + (1 - (v - chartMin) / chartRange) * innerH;
+      const toX = (i) => padX + (i / (data.length - 1)) * innerW;
+
+      const yLabels = [chartMax, (chartMax + chartMin) / 2, chartMin].map(v => ({
+        value: v,
+        y: toY(v)
+      }));
+
+      return (
+        <div ref={containerRef} style={{ width: '100%', height }}>
+          <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} style={{ display: 'block' }}>
+            {/* グリッド */}
+            {yLabels.map((label, i) => (
+              <line key={'g' + i} x1={padX} y1={label.y} x2={w - 8} y2={label.y} stroke="#27272a" strokeWidth="0.5" />
+            ))}
+            {/* Y軸ラベル */}
+            {!compact && yLabels.map((label, i) => (
+              <text key={'l' + i} x={padX - 4} y={label.y + 3} fill="#52525b" fontSize="9" textAnchor="end" fontFamily="JetBrains Mono, monospace">
+                {Math.floor(label.value)}
+              </text>
+            ))}
+            {/* 取得単価ライン(individual時のみ refLine が来る) */}
+            {refLine && (
+              <line x1={padX} y1={toY(refLine)} x2={w - 8} y2={toY(refLine)} stroke="#fbbf24" strokeWidth="1" strokeDasharray="3 3" opacity="0.7" />
+            )}
+            {/* 各シリーズを描画(highlight=falseを先に、trueを後に重ねる) */}
+            {[...seriesList].sort((a, b) => (a.highlight ? 1 : 0) - (b.highlight ? 1 : 0)).map(s => {
+              const path = data
+                .filter(d => d[s.key] !== undefined)
+                .map((d, i) => `${i === 0 ? 'M' : 'L'} ${toX(i).toFixed(1)} ${toY(d[s.key]).toFixed(1)}`)
+                .join(' ');
+              const last = data[data.length - 1];
+              return (
+                <g key={s.key}>
+                  <path
+                    d={path}
+                    fill="none"
+                    stroke={s.color}
+                    strokeWidth={s.highlight ? 2 : 1}
+                    strokeLinejoin="round"
+                    strokeLinecap="round"
+                    opacity={s.highlight ? 1 : 0.55}
+                  />
+                  {last && last[s.key] !== undefined && (
+                    <circle
+                      cx={toX(data.length - 1)}
+                      cy={toY(last[s.key])}
+                      r={s.highlight ? 3 : 2}
+                      fill={s.color}
+                      opacity={s.highlight ? 1 : 0.7}
+                    />
+                  )}
+                </g>
+              );
+            })}
+          </svg>
+        </div>
+      );
+    }
+
+    // ===== ノーマルモード銘柄定義 =====
+    const STOCKS = {
+      soga: {
+        name: 'ソガ産業',
+        ticker: 'SOGA',
+        initialPrice: 1200,
+        volatility: 0.008,
+        drift: 0.0008,
+        color: '#4ade80',
+        desc: '産業系・安定型',
+        risk: 'low'
+      },
+      sessa: {
+        name: '有限会社切磋琢磨',
+        ticker: 'SSTM',
+        initialPrice: 850,
+        volatility: 0.018,
+        drift: 0.0003,
+        color: '#60a5fa',
+        desc: '中堅企業・中庸型',
+        risk: 'mid'
+      },
+      iyowa: {
+        name: 'いよわ製薬',
+        ticker: 'IYWA',
+        initialPrice: 680,
+        volatility: 0.022,
+        drift: 0.0004,
+        color: '#f472b6',
+        desc: '製薬・中庸型',
+        risk: 'mid'
+      },
+      ultra: {
+        name: 'ITウルトラ只野コーポレーション',
+        ticker: 'TDNO',
+        initialPrice: 420,
+        volatility: 0.045,
+        drift: 0.0005,
+        color: '#a78bfa',
+        desc: 'IT・高リスク',
+        risk: 'high'
+      },
+      mirutoken: {
+        name: 'mirutoken',
+        ticker: 'MRTK',
+        initialPrice: 280,
+        volatility: 0.080,
+        drift: 0,
+        color: '#fbbf24',
+        desc: 'ミーム系・超高リスク',
+        risk: 'extreme'
+      }
+    };
+
+    // ===== リスク度プリセット =====
+    const RISK_PRESETS = {
+      low: { label: '低', volatility: 0.008, drift: 0.0008, color: '#4ade80', desc: '安定型' },
+      mid: { label: '中', volatility: 0.018, drift: 0.0003, color: '#60a5fa', desc: '中庸型' },
+      high: { label: '高', volatility: 0.045, drift: 0.0005, color: '#f472b6', desc: '高リスク' },
+      extreme: { label: '超高', volatility: 0.080, drift: 0, color: '#fbbf24', desc: 'ギャンブル' }
+    };
+
+    // ===== ハードコードのノーマル用ニュース =====
+    const NEWS_EVENTS = [
+      // ソガ産業(安定型・低リスク)
+      { stock: 'soga', impact: 0.04, text: 'ソガ産業、社長が「なんとなく」値上げを決定。しかし市場は好感', positive: true },
+      { stock: 'soga', impact: -0.03, text: 'ソガ産業の社長、社員旅行で行方不明。3日後に温泉宿で発見される', positive: false },
+      { stock: 'soga', impact: 0.025, text: 'ソガ産業、創業100周年記念で全社員に金一封。なぜか株価上昇', positive: true },
+      { stock: 'soga', impact: -0.02, text: 'ソガ産業の経理、計算機の電池切れで決算3日遅れる', positive: false },
+      { stock: 'soga', impact: 0.03, text: 'ソガ産業、地味すぎる新製品が海外で「クール」と話題に', positive: true },
+
+      // 有限会社切磋琢磨(中庸型)
+      { stock: 'sessa', impact: 0.06, text: '有限会社切磋琢磨、社員同士の腕相撲大会が偶然YouTubeでバズる', positive: true },
+      { stock: 'sessa', impact: -0.05, text: '有限会社切磋琢磨、ライバル社員の引き抜き合戦に発展。退職ラッシュ', positive: false },
+      { stock: 'sessa', impact: 0.07, text: '有限会社切磋琢磨、職人の技がテレビで取り上げられ受注殺到', positive: true },
+      { stock: 'sessa', impact: -0.04, text: '有限会社切磋琢磨、新入社員研修で社訓を間違えて唱和。SNSで物議', positive: false },
+      { stock: 'sessa', impact: 0.05, text: '有限会社切磋琢磨、社内派閥争いがドキュメンタリー映画化', positive: true },
+
+      // ITウルトラ只野コーポレーション(高リスク)
+      { stock: 'ultra', impact: 0.18, text: '只野社長、気まぐれで子会社を売却。「面白そうだったから(本人談)」', positive: true },
+      { stock: 'ultra', impact: -0.15, text: '只野社長、深夜にXで「会社辞めるかも」とつぶやき株価暴落', positive: false },
+      { stock: 'ultra', impact: 0.22, text: '只野社長、AIに会社経営を任せると発表。「我輩より優秀(本人談)」', positive: true },
+      { stock: 'ultra', impact: -0.18, text: '只野社長、取締役会を欠席しサウナで瞑想中と判明', positive: false },
+      { stock: 'ultra', impact: 0.20, text: 'ITウルトラ只野コーポ、社長の謎ポーズが新ロゴに採用され話題', positive: true },
+      { stock: 'ultra', impact: -0.12, text: '只野社長、記者会見でラーメンの話しかせず投資家困惑', positive: false },
+
+      // いよわ製薬(中庸型)
+      { stock: 'iyowa', impact: 0.07, text: 'いよわ製薬、新薬の治験で予想を超える効果を確認', positive: true },
+      { stock: 'iyowa', impact: -0.06, text: 'いよわ製薬、開発中の薬剤に副作用報告。FDA再審査へ', positive: false },
+      { stock: 'iyowa', impact: 0.08, text: 'いよわ製薬の研究員、寝不足で発見した新成分が大ヒット', positive: true },
+      { stock: 'iyowa', impact: -0.05, text: 'いよわ製薬の社長、健康食品にハマりすぎて株主総会欠席', positive: false },
+      { stock: 'iyowa', impact: 0.06, text: 'いよわ製薬、ペットの薬市場に参入し愛犬家から熱狂的支持', positive: true },
+      { stock: 'iyowa', impact: -0.07, text: 'いよわ製薬、社員食堂のサラダから謎の成分検出され大騒ぎ', positive: false },
+
+      // mirutoken(超高リスク・ミーム系)
+      { stock: 'mirutoken', impact: 0.30, text: 'mirutoken、有名Vtuberが「全資産突っ込む」と宣言🚀月へ', positive: true },
+      { stock: 'mirutoken', impact: -0.28, text: 'mirutoken、運営の正体不明説が浮上し信者が大量離脱', positive: false },
+      { stock: 'mirutoken', impact: 0.35, text: 'mirutoken、突如として街中の看板に出現。誰がやったか不明🌙', positive: true },
+      { stock: 'mirutoken', impact: -0.30, text: 'mirutoken、海外取引所から上場廃止の噂で大暴落💀', positive: false },
+      { stock: 'mirutoken', impact: 0.25, text: 'mirutoken、創設者の犬がCEO就任。なぜか業績爆上がり🐕', positive: true },
+      { stock: 'mirutoken', impact: -0.32, text: 'mirutokenホルダー、全員のウォレットが空になる怪事件発生', positive: false },
+      { stock: 'mirutoken', impact: 0.28, text: 'mirutoken、占星術師「来週は爆騰」と予言し買い殺到', positive: true },
+    ];
+
+    // ===== カスタム銘柄用 リスク別ニューステンプレート =====
+    const NEWS_TEMPLATES = {
+      low: [
+        { impact: 0.025, text: '[NAME]の社員、定時退社を3日連続達成。働き方改革と話題', positive: true },
+        { impact: 0.02, text: '[NAME]、経理のミスで黒字発覚。社内で軽い騒ぎに', positive: true },
+        { impact: -0.02, text: '[NAME]の社長、健康診断で再検査。経営方針に影響なし', positive: false },
+        { impact: 0.03, text: '[NAME]、社員食堂のカレーが美味しすぎてX(旧Twitter)でトレンド入り', positive: true },
+        { impact: -0.015, text: '[NAME]、コピー機の故障で書類提出が遅延。担当者は涙目', positive: false },
+        { impact: 0.025, text: '[NAME]、創業者の遺訓「無理するな」が再評価される', positive: true },
+      ],
+      mid: [
+        { impact: 0.05, text: '[NAME]の若手社員、社長にタメ口で意見し抜擢される', positive: true },
+        { impact: -0.05, text: '[NAME]、社内不倫スキャンダルが業界誌にすっぱ抜かれる', positive: false },
+        { impact: 0.06, text: '[NAME]、忘年会の出し物が予想外にバズり知名度UP', positive: true },
+        { impact: -0.04, text: '[NAME]の社長、TVインタビューで言葉が出ず無言を貫く', positive: false },
+        { impact: 0.04, text: '[NAME]、新人研修のシュールさが話題沸騰', positive: true },
+        { impact: -0.06, text: '[NAME]、取締役会が大荒れ。社長が机を叩いたとの噂', positive: false },
+      ],
+      high: [
+        { impact: 0.13, text: '[NAME]社長、突然のサプライズ会見で「世界征服」を宣言🌍', positive: true },
+        { impact: -0.12, text: '[NAME]社長、深夜の生配信で愚痴を炸裂させ炎上', positive: false },
+        { impact: 0.15, text: '[NAME]、社員のTikTokがバズり採用倍率100倍に', positive: true },
+        { impact: -0.10, text: '[NAME]、社内会議で社長の昼寝が発覚。投資家激怒', positive: false },
+        { impact: 0.10, text: '[NAME]、有名人がオフィス見学に来訪し株価ストップ高', positive: true },
+        { impact: -0.13, text: '[NAME]、決算説明会で社長がポエムを朗読し市場困惑', positive: false },
+      ],
+      extreme: [
+        { impact: 0.28, text: '[NAME]社長、気まぐれで全社員にボーナス支給!「面白そうだったから(本人談)」', positive: true },
+        { impact: -0.25, text: '[NAME]社長、UFOに連れ去られたと主張。真偽不明だが株価暴落💥', positive: false },
+        { impact: 0.32, text: '[NAME]、社長がX(旧Twitter)で「月行く」とつぶやき株価2倍🚀', positive: true },
+        { impact: -0.28, text: '[NAME]社長、競合他社の社長と公開ケンカ。場外乱闘で警察沙汰', positive: false },
+        { impact: 0.25, text: '[NAME]、謎の覆面投資家が大量買い。「直感(本人談)」🌙', positive: true },
+        { impact: -0.22, text: '[NAME]社長、占い師の助言で本社移転を発表。投資家困惑', positive: false },
+        { impact: 0.30, text: '[NAME]、創業者の犬が新CEOに就任。なぜか業績爆上がり🐕', positive: true },
+        { impact: -0.30, text: '[NAME]、全社員が同時退職。理由は「なんとなく」', positive: false },
+      ]
+    };
+
+    // カスタム銘柄用ティッカー自動生成(銘柄名からアルファベット抽出 or 連番)
+    function generateTicker(name, index) {
+      const ascii = name.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+      if (ascii.length >= 3) return ascii.slice(0, 4);
+      return 'STK' + (index + 1);
+    }
+
+    const MARKET_EVENTS = [
+      { type: 'crash', impact: -0.08, text: '⚠️ 突然の市場パニック!原因は誰かのデマツイート', duration: 5 },
+      { type: 'bubble', impact: 0.06, text: '🎉 謎のお祭りムード到来!理由不明だが買い殺到', duration: 5 },
+      { type: 'rate_up', impact: -0.04, text: '📉 中央銀行総裁、利上げを発表。株式に冷や水', duration: 4 },
+      { type: 'rate_down', impact: 0.04, text: '📈 中央銀行が利下げ、市場は歓喜', duration: 4 },
+      { type: 'meme', impact: 0.07, text: '🔥 SNSでミーム拡散!とにかく買い時らしい', duration: 4 },
+      { type: 'fud', impact: -0.06, text: '💀 著名アナリストが「終わりの始まり」と警告', duration: 4 },
+    ];
+
+    // ===== DEATH MODE 専用銘柄(死神株) =====
+    const DEATH_STOCKS = {
+      reaper: {
+        name: '死神商事',
+        ticker: 'DETH',
+        initialPrice: 666,
+        volatility: 0.090,
+        drift: -0.001,
+        color: '#dc2626',
+        desc: '魂を取引する',
+        risk: 'extreme'
+      },
+      void: {
+        name: '虚無コーポレーション',
+        ticker: 'VOID',
+        initialPrice: 1313,
+        volatility: 0.075,
+        drift: -0.0008,
+        color: '#7c2d12',
+        desc: '存在自体が怪しい',
+        risk: 'extreme'
+      },
+      hellfire: {
+        name: '地獄ファイアHD',
+        ticker: 'HELL',
+        initialPrice: 999,
+        volatility: 0.120,
+        drift: -0.0015,
+        color: '#b91c1c',
+        desc: '燃え尽きるまで',
+        risk: 'extreme'
+      }
+    };
+
+    // ===== DEATH MODE 専用ニュース =====
+    const DEATH_NEWS = [
+      { stock: 'reaper', impact: 0.35, text: '死神商事、本日の取扱魂が過去最多。社員は皆無口に🔪', positive: true },
+      { stock: 'reaper', impact: -0.40, text: '死神商事、契約書に紛れた「自分の名前」を発見した投資家が失踪💀', positive: false },
+      { stock: 'reaper', impact: 0.30, text: '死神商事、CEO自ら鎌を持ち決算発表。投資家は震え上がる', positive: true },
+      { stock: 'reaper', impact: -0.45, text: '死神商事の本社ビル、地図から消滅。誰も場所を覚えていない', positive: false },
+      { stock: 'void', impact: 0.40, text: '虚無コーポ、何もしてないのに利益が出る。誰も理由を説明できず', positive: true },
+      { stock: 'void', impact: -0.42, text: '虚無コーポ、社員全員が同じ夢を見たと証言。株価暴落', positive: false },
+      { stock: 'void', impact: 0.32, text: '虚無コーポの本社、鏡に映らないと話題。投資家殺到', positive: true },
+      { stock: 'void', impact: -0.50, text: '虚無コーポ、存在しなかった可能性が浮上。記録も消える', positive: false },
+      { stock: 'hellfire', impact: 0.45, text: '地獄ファイアHD、地下から炎が噴出するも「想定内」と発表🔥', positive: true },
+      { stock: 'hellfire', impact: -0.48, text: '地獄ファイアHD、社員旅行先が地獄だったと判明。生還者ゼロ', positive: false },
+      { stock: 'hellfire', impact: 0.38, text: '地獄ファイアHD、悪魔と提携契約を締結。配当は血の涙', positive: true },
+      { stock: 'hellfire', impact: -0.55, text: '地獄ファイアHD、本社が文字通り溶け落ちる。建て替えコスト不明', positive: false },
+    ];
+
+    const DEATH_MARKET_EVENTS = [
+      { type: 'apocalypse', impact: -0.18, text: '☠️ 終末の鐘が鳴り響く...全銘柄に死の影', duration: 6 },
+      { type: 'pact', impact: 0.12, text: '👁️ 何かと契約が結ばれた。市場は歓喜と恐怖に震える', duration: 5 },
+      { type: 'sacrifice', impact: -0.15, text: '🔪 大量の生贄が捧げられた。投資家もまた...', duration: 5 },
+      { type: 'resurrection', impact: 0.15, text: '🩸 死んだはずの株価が蘇る。誰の犠牲の上に?', duration: 5 },
+      { type: 'curse', impact: -0.20, text: '💀 呪いがかけられた。逃げられる者などいない', duration: 6 },
+    ];
+
+    const INITIAL_CASH = 1000000;
+    const GAME_OVER_THRESHOLD = -300000;
+    const DEATH_INITIAL_CASH = 500000;       // デスモード初期資金
+    const DEATH_INITIAL_DEBT = 0;            // 初期借金なし(シンプル化)
+    const DEATH_GAME_OVER_THRESHOLD = -100000; // 破産ラインも近い
+    const TICK_INTERVAL = 500;
+    const NEWS_CHANCE = 0.04;
+    const DEATH_NEWS_CHANCE = 0.08;          // ニュース2倍
+    const MARKET_EVENT_CHANCE = 0.015;
+    const DEATH_MARKET_CHANCE = 0.04;        // 市場イベントも頻発
+    const TIME_LIMIT_TICKS = 360;
+    const DEATH_TIME_LIMIT = 360;            // デスモード3分
+
+    // セッション中のみ有効な解放(リロードで毎回リセット)
+    function hasUnlockedDeathMode() {
+      return false;
+    }
+    function unlockDeathMode() {
+      // localStorageには書かない(セッション中のみ)
+    }
+
+    // ===== 死神社長との対話 =====
+    const REAPER_DIALOGUE = [
+      '・・・・・',
+      '来たか。',
+      '数字の海を泳ぎ切った人間は、皆ここに辿り着く。',
+      '不思議なものだな。',
+      '金は持って帰れない。命も、結局は同じだ。',
+      'だから私は、こうして賭けの場を用意する。',
+      '最後にもう一度、何かを選ぶために。',
+      '・・・お前のその目。',
+      '気に入った。',
+      'カードだ。21に近いほうが取る。それだけ。',
+      '勝てば賭けた分、お前の取り分になる。',
+      'だが・・・三度負ければ、その時点で終わりだ。',
+      'お前のその全て、私に賭けてみるか。',
+      '・・・無理にとは言わん。'
+    ];
+
+    function ReaperDialogue({ onAccept, onDecline, resultData }) {
+      // フェーズ:'result' = 結果表示 → 'dialogue' = 対話
+      const [stage, setStage] = useState(resultData ? 'result' : 'dialogue');
+      const [lineIdx, setLineIdx] = useState(0);
+      const [charIdx, setCharIdx] = useState(0);
+      const [showChoices, setShowChoices] = useState(false);
+
+      const currentLine = REAPER_DIALOGUE[lineIdx] || '';
+
+      // タイプライター効果(対話フェーズのみ)
+      useEffect(() => {
+        if (stage !== 'dialogue') return;
+        if (charIdx >= currentLine.length) return;
+        const t = setTimeout(() => setCharIdx(c => c + 1), 70);
+        return () => clearTimeout(t);
+      }, [charIdx, currentLine, stage]);
+
+      // セリフ完了 + 最終 → 選択肢
+      useEffect(() => {
+        if (stage !== 'dialogue') return;
+        if (charIdx >= currentLine.length && lineIdx >= REAPER_DIALOGUE.length - 1) {
+          const t = setTimeout(() => setShowChoices(true), 400);
+          return () => clearTimeout(t);
+        }
+      }, [charIdx, lineIdx, currentLine, stage]);
+
+      const handleAdvance = () => {
+        if (charIdx < currentLine.length) {
+          setCharIdx(currentLine.length);
+          return;
+        }
+        if (lineIdx < REAPER_DIALOGUE.length - 1) {
+          setLineIdx(lineIdx + 1);
+          setCharIdx(0);
+        }
+      };
+
+      // ===== リザルト画面 =====
+      if (stage === 'result' && resultData) {
+        const profit = resultData.finalAssets - resultData.initialCash;
+        const profitPercent = (profit / resultData.initialCash) * 100;
+        let rank = 'D';
+        if (profitPercent >= 100) rank = 'S';
+        else if (profitPercent >= 50) rank = 'A';
+        else if (profitPercent >= 25) rank = 'B';
+        else if (profitPercent >= 10) rank = 'C';
+        const rankColors = {
+          S: '#fbbf24', A: '#f87171', B: '#fb7185', C: '#a78bfa', D: '#71717a'
+        };
+        return (
+          <div
+            className="fixed inset-0 z-50 flex flex-col items-center justify-center p-6"
+            style={{
+              fontFamily: "'JetBrains Mono', 'Courier New', monospace",
+              background: 'radial-gradient(ellipse at center, rgba(40,0,0,0.95), #000 70%)'
+            }}
+          >
+            <div className="border-l-4 border-red-700 pl-4 mb-8 self-start max-w-md w-full">
+              <div className="text-red-700 text-[10px] tracking-[0.5em] mb-2">// DEATH MODE CLEARED</div>
+              <h1 className="text-4xl font-black text-red-400" style={{ textShadow: '0 0 20px rgba(220,38,38,0.5)' }}>
+                生還
+              </h1>
+              <div className="text-zinc-500 text-xs mt-2">死神の市場から、お前は戻ってきた。</div>
+            </div>
+
+            <div className="w-full max-w-md space-y-3 mb-8">
+              <div className="border border-red-900/50 p-4 bg-black/40">
+                <div className="text-[10px] tracking-widest text-red-700 mb-1">FINAL ASSETS</div>
+                <div className="text-3xl font-black text-amber-400">¥{resultData.finalAssets.toLocaleString()}</div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="border border-zinc-800 p-3">
+                  <div className="text-[10px] tracking-widest text-zinc-500 mb-1">PROFIT</div>
+                  <div className={`text-xl font-black ${profit >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                    {profit >= 0 ? '+' : ''}¥{profit.toLocaleString()}
+                  </div>
+                  <div className={`text-[10px] mt-0.5 ${profit >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>
+                    {profitPercent >= 0 ? '+' : ''}{profitPercent.toFixed(1)}%
+                  </div>
+                </div>
+                <div className="border border-zinc-800 p-3">
+                  <div className="text-[10px] tracking-widest text-zinc-500 mb-1">RANK</div>
+                  <div className="text-3xl font-black" style={{ color: rankColors[rank], textShadow: `0 0 8px ${rankColors[rank]}` }}>
+                    {rank}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <button
+              onClick={() => setStage('dialogue')}
+              className="w-full max-w-md py-4 bg-red-900 active:bg-red-950 text-red-100 font-black tracking-widest border border-red-700"
+              style={{ textShadow: '0 0 6px rgba(254,202,202,0.6)' }}
+            >
+              続ける →
+            </button>
+          </div>
+        );
+      }
+
+      return (
+        <div
+          className="fixed inset-0 z-50 flex flex-col"
+          style={{
+            fontFamily: "'JetBrains Mono', 'Courier New', monospace",
+            background: 'radial-gradient(ellipse at center, rgba(40,0,0,0.95), #000 70%)',
+            cursor: showChoices ? 'default' : 'pointer'
+          }}
+          onClick={!showChoices ? handleAdvance : undefined}
+        >
+          {/* 死神シルエット */}
+          <div className="flex-1 flex items-center justify-center px-6 py-8">
+            <div className="relative" style={{ width: 240, height: 320 }}>
+              <svg width="240" height="320" viewBox="0 0 240 320" style={{ filter: 'drop-shadow(0 0 40px rgba(220,38,38,0.5))' }}>
+                <defs>
+                  {/* 赤いオーラのグラデーション */}
+                  <radialGradient id="reaperAura" cx="50%" cy="40%">
+                    <stop offset="0%" stopColor="#7f1d1d" stopOpacity="0.4" />
+                    <stop offset="50%" stopColor="#450a0a" stopOpacity="0.2" />
+                    <stop offset="100%" stopColor="#000" stopOpacity="0" />
+                  </radialGradient>
+                  {/* マントのグラデーション */}
+                  <linearGradient id="cloak" x1="0%" y1="0%" x2="0%" y2="100%">
+                    <stop offset="0%" stopColor="#18181b" />
+                    <stop offset="60%" stopColor="#0a0a0a" />
+                    <stop offset="100%" stopColor="#000" />
+                  </linearGradient>
+                  {/* 鎌の刃のグラデーション */}
+                  <linearGradient id="bladeGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                    <stop offset="0%" stopColor="#fca5a5" />
+                    <stop offset="40%" stopColor="#dc2626" />
+                    <stop offset="100%" stopColor="#450a0a" />
+                  </linearGradient>
+                  {/* 目のグロー */}
+                  <radialGradient id="eyeGlow">
+                    <stop offset="0%" stopColor="#fca5a5" stopOpacity="1" />
+                    <stop offset="40%" stopColor="#dc2626" stopOpacity="1" />
+                    <stop offset="100%" stopColor="#450a0a" stopOpacity="0" />
+                  </radialGradient>
+                </defs>
+
+                {/* 背景の赤いオーラ */}
+                <circle cx="120" cy="130" r="110" fill="url(#reaperAura)">
+                  <animate attributeName="r" values="110;120;110" dur="4s" repeatCount="indefinite" />
+                </circle>
+
+                {/* 大鎌の柄(長く・斜め) */}
+                <line x1="200" y1="10" x2="40" y2="310" stroke="#0a0a0a" strokeWidth="5" strokeLinecap="round" />
+                <line x1="200" y1="10" x2="40" y2="310" stroke="#3f3f46" strokeWidth="2" strokeLinecap="round" opacity="0.6" />
+
+                {/* 鎌の刃(三日月型・鋭角) */}
+                <path
+                  d="M 200 10 Q 240 0 235 50 Q 230 80 215 90 Q 220 60 200 50 Q 195 30 200 10 Z"
+                  fill="url(#bladeGrad)"
+                  stroke="#000"
+                  strokeWidth="1.5"
+                />
+                {/* 刃のハイライト */}
+                <path
+                  d="M 205 15 Q 225 20 225 45"
+                  fill="none"
+                  stroke="#fecaca"
+                  strokeWidth="1.5"
+                  opacity="0.8"
+                />
+
+                {/* マント(裾がボロボロ・鋭角) */}
+                <path
+                  d="M 120 100
+                     L 75 130
+                     L 60 180
+                     L 50 230
+                     L 45 280
+                     L 55 290 L 65 275 L 75 290 L 85 270 L 95 290 L 105 275
+                     L 115 295 L 125 275 L 135 295 L 145 275 L 155 290 L 165 270 L 175 290
+                     L 185 280 L 195 230 L 185 180 L 170 130 Z"
+                  fill="url(#cloak)"
+                  stroke="#27272a"
+                  strokeWidth="1"
+                />
+
+                {/* 内側のマント影(深い闇) */}
+                <path
+                  d="M 120 110 L 90 140 L 80 200 L 90 270 L 120 280 L 150 270 L 160 200 L 150 140 Z"
+                  fill="#000"
+                  opacity="0.7"
+                />
+
+                {/* フード本体(鋭角な五角形ベース) */}
+                <path
+                  d="M 120 30
+                     L 80 70
+                     L 75 110
+                     L 90 130
+                     L 150 130
+                     L 165 110
+                     L 160 70 Z"
+                  fill="#09090b"
+                  stroke="#27272a"
+                  strokeWidth="1.5"
+                />
+
+                {/* フードの先端ハイライト */}
+                <path
+                  d="M 120 30 L 100 60 L 105 50 Z"
+                  fill="#27272a"
+                />
+
+                {/* フード内側の闇 */}
+                <path
+                  d="M 95 75 L 90 115 L 100 125 L 140 125 L 150 115 L 145 75 Z"
+                  fill="#000"
+                />
+
+                {/* 目のオーラ(2つ) */}
+                <ellipse cx="106" cy="98" rx="9" ry="7" fill="url(#eyeGlow)" opacity="0.7">
+                  <animate attributeName="opacity" values="0.5;0.9;0.5" dur="2.5s" repeatCount="indefinite" />
+                </ellipse>
+                <ellipse cx="134" cy="98" rx="9" ry="7" fill="url(#eyeGlow)" opacity="0.7">
+                  <animate attributeName="opacity" values="0.5;0.9;0.5" dur="2.5s" repeatCount="indefinite" />
+                </ellipse>
+
+                {/* 目本体(細い裂け目) */}
+                <path d="M 100 98 L 112 96 L 112 100 L 100 102 Z" fill="#dc2626">
+                  <animate attributeName="opacity" values="1;0.6;1" dur="2.5s" repeatCount="indefinite" />
+                </path>
+                <path d="M 128 96 L 140 98 L 140 102 L 128 100 Z" fill="#dc2626">
+                  <animate attributeName="opacity" values="1;0.6;1" dur="2.5s" repeatCount="indefinite" />
+                </path>
+
+                {/* 骨の手(マントから出てる) */}
+                <g opacity="0.92">
+                  {/* 手のひら */}
+                  <path
+                    d="M 70 200 L 65 220 L 70 240 L 80 245 L 88 240 L 86 220 L 80 200 Z"
+                    fill="#e7e5e4"
+                    stroke="#1c1917"
+                    strokeWidth="0.8"
+                  />
+                  {/* 指(尖った骨) */}
+                  <path d="M 67 218 L 60 232 L 63 234 L 70 222" fill="#e7e5e4" stroke="#1c1917" strokeWidth="0.5" />
+                  <path d="M 72 222 L 67 240 L 71 242 L 76 226" fill="#e7e5e4" stroke="#1c1917" strokeWidth="0.5" />
+                  <path d="M 78 224 L 76 244 L 80 244 L 82 226" fill="#e7e5e4" stroke="#1c1917" strokeWidth="0.5" />
+                  <path d="M 84 222 L 86 240 L 90 238 L 88 222" fill="#e7e5e4" stroke="#1c1917" strokeWidth="0.5" />
+                </g>
+              </svg>
+            </div>
+          </div>
+
+          {/* 会話エリア */}
+          <div className="px-6 pb-8" style={{ minHeight: 180 }}>
+            <div className="border-t-2 border-red-900 pt-4">
+              <div className="text-red-700 text-[10px] tracking-[0.3em] mb-2">死神</div>
+              <div
+                className="text-zinc-100 text-base leading-relaxed min-h-[3em]"
+                style={{ textShadow: '0 0 4px rgba(220,38,38,0.3)' }}
+              >
+                {currentLine.slice(0, charIdx)}
+                {charIdx < currentLine.length && <span className="text-red-500 animate-pulse">▮</span>}
+              </div>
+            </div>
+
+            {/* 選択肢 */}
+            {showChoices ? (
+              <div className="grid grid-cols-2 gap-2 mt-4" style={{ animation: 'unlockFadeIn 0.6s ease-out' }}>
+                <button
+                  onClick={onAccept}
+                  className="py-4 bg-red-900 active:bg-red-950 text-red-100 font-black tracking-widest border border-red-700"
+                  style={{ textShadow: '0 0 6px rgba(254,202,202,0.6)' }}
+                >
+                  ☠ 受けて立つ ☠
+                </button>
+                <button
+                  onClick={onDecline}
+                  className="py-4 bg-black active:bg-zinc-900 text-zinc-500 font-bold tracking-widest border border-zinc-800"
+                >
+                  立ち去る
+                </button>
+              </div>
+            ) : (
+              <div className="text-zinc-700 text-[10px] tracking-widest mt-4 text-right">
+                {charIdx < currentLine.length ? '画面をタップで送る' : 'タップで次へ ▶'}
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    // ===== DEATH DEAL(ブラックジャック)=====
+    const SUITS = [
+      { sym: '☠', color: '#ef4444' },
+      { sym: '🔪', color: '#fafafa' },
+      { sym: '👁', color: '#fbbf24' },
+      { sym: '🩸', color: '#dc2626' },
+    ];
+    const RANKS = ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'];
+
+    function buildDeck() {
+      const deck = [];
+      SUITS.forEach(s => {
+        RANKS.forEach(r => {
+          deck.push({ rank: r, suit: s });
+        });
+      });
+      // シャッフル
+      for (let i = deck.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [deck[i], deck[j]] = [deck[j], deck[i]];
+      }
+      return deck;
+    }
+
+    function cardValue(rank) {
+      if (rank === 'A') return 11;
+      if (rank === 'J' || rank === 'Q' || rank === 'K') return 10;
+      return parseInt(rank, 10);
+    }
+
+    function handTotal(cards) {
+      let total = cards.reduce((s, c) => s + cardValue(c.rank), 0);
+      let aces = cards.filter(c => c.rank === 'A').length;
+      while (total > 21 && aces > 0) {
+        total -= 10;
+        aces--;
+      }
+      return total;
+    }
+
+    function PlayingCard({ card, hidden = false }) {
+      const w = 64, h = 92;
+      if (hidden) {
+        return (
+          <div style={{
+            width: w, height: h,
+            background: 'linear-gradient(135deg, #450a0a 0%, #1c1917 50%, #450a0a 100%)',
+            border: '2px solid #7f1d1d',
+            borderRadius: 6,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            boxShadow: '0 0 12px rgba(220,38,38,0.4)',
+            color: '#7f1d1d',
+            fontSize: 24,
+          }}>☠</div>
+        );
+      }
+      return (
+        <div style={{
+          width: w, height: h,
+          background: '#fafafa',
+          border: '2px solid #18181b',
+          borderRadius: 6,
+          padding: '4px 6px',
+          position: 'relative',
+          color: card.suit.color,
+          boxShadow: '0 4px 12px rgba(0,0,0,0.6)',
+          fontFamily: "'JetBrains Mono', 'Courier New', monospace",
+        }}>
+          {/* 左上 */}
+          <div style={{ position: 'absolute', top: 4, left: 6, fontSize: 14, fontWeight: 900, lineHeight: 1 }}>
+            {card.rank}
+          </div>
+          {/* 中央スーツ */}
+          <div style={{
+            position: 'absolute',
+            inset: 0,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontSize: 30,
+            lineHeight: 1
+          }}>
+            {card.suit.sym}
+          </div>
+          {/* 中央の大きなランク表示(中央スーツの上) */}
+          <div style={{
+            position: 'absolute',
+            top: '50%',
+            left: '50%',
+            transform: 'translate(-50%, -50%)',
+            fontSize: 26,
+            fontWeight: 900,
+            lineHeight: 1,
+            color: card.suit.color,
+            textShadow: '0 0 6px #fafafa, 0 0 6px #fafafa, 0 0 6px #fafafa',
+          }}>
+            {card.rank}
+          </div>
+          {/* 右下(回転) */}
+          <div style={{
+            position: 'absolute', bottom: 4, right: 6,
+            fontSize: 14, fontWeight: 900, lineHeight: 1,
+            transform: 'rotate(180deg)'
+          }}>
+            {card.rank}
+          </div>
+        </div>
+      );
+    }
+
+    function BlackjackGame({ initialChips, onExit }) {
+      const [chips, setChips] = useState(initialChips);
+      const [highChips, setHighChips] = useState(initialChips);
+      const [bet, setBet] = useState(Math.max(100, Math.floor(initialChips * 0.1)));
+      const [round, setRound] = useState(0);
+      const [phase, setPhase] = useState('betting'); // betting, playing, dealer, result, gameover
+      const [deck, setDeck] = useState([]);
+      const [playerHand, setPlayerHand] = useState([]);
+      const [dealerHand, setDealerHand] = useState([]);
+      const [resultText, setResultText] = useState('');
+      const [resultProfit, setResultProfit] = useState(0);
+      const [lives, setLives] = useState(3);
+      const [gameOverReason, setGameOverReason] = useState(''); // 'lives' | 'chips'
+
+      // 賭け金候補
+      const betOptions = [
+        { label: '10%', value: Math.max(1, Math.floor(chips * 0.1)) },
+        { label: '25%', value: Math.max(1, Math.floor(chips * 0.25)) },
+        { label: '50%', value: Math.max(1, Math.floor(chips * 0.5)) },
+        { label: 'ALL', value: chips },
+      ];
+
+      // ハイスコア更新
+      useEffect(() => {
+        if (chips > highChips) setHighChips(chips);
+      }, [chips]);
+
+      // ラウンド開始
+      const startRound = () => {
+        if (bet > chips || bet <= 0) return;
+        const d = buildDeck();
+        const player = [d.pop(), d.pop()];
+        const dealer = [d.pop(), d.pop()];
+        setDeck(d);
+        setPlayerHand(player);
+        setDealerHand(dealer);
+        setPhase('playing');
+        // ナチュラル21の即時判定
+        if (handTotal(player) === 21) {
+          setTimeout(() => stand(player, dealer, d), 600);
+        }
+      };
+
+      const hit = () => {
+        if (phase !== 'playing') return;
+        const newDeck = [...deck];
+        const newCard = newDeck.pop();
+        const newHand = [...playerHand, newCard];
+        setDeck(newDeck);
+        setPlayerHand(newHand);
+        const total = handTotal(newHand);
+        if (total > 21) {
+          // バスト
+          setTimeout(() => settle(newHand, dealerHand, 'bust'), 400);
+        } else if (total === 21) {
+          setTimeout(() => stand(newHand, dealerHand, newDeck), 400);
+        }
+      };
+
+      const stand = (pHand = playerHand, dHand = dealerHand, d = deck) => {
+        if (phase !== 'playing' && phase !== 'betting') return;
+        setPhase('dealer');
+        // ディーラー17以上まで引く
+        let curDealer = [...dHand];
+        let curDeck = [...d];
+        const drawNext = () => {
+          const total = handTotal(curDealer);
+          if (total < 17) {
+            curDealer = [...curDealer, curDeck.pop()];
+            setDealerHand([...curDealer]);
+            setDeck([...curDeck]);
+            setTimeout(drawNext, 600);
+          } else {
+            settle(pHand, curDealer, 'showdown');
+          }
+        };
+        setTimeout(drawNext, 700);
+      };
+
+      const settle = (pHand, dHand, mode) => {
+        const pTotal = handTotal(pHand);
+        const dTotal = handTotal(dHand);
+        let profit = 0;
+        let text = '';
+        let isLoss = false;
+
+        if (mode === 'bust' || pTotal > 21) {
+          profit = -bet;
+          text = 'BUST · 魂を奪われた';
+          isLoss = true;
+        } else if (dTotal > 21) {
+          profit = bet;
+          text = 'DEALER BUST · 死神が崩れた';
+        } else if (pTotal === 21 && pHand.length === 2) {
+          profit = Math.floor(bet * 1.5);
+          text = 'BLACKJACK · 完璧だ';
+        } else if (pTotal > dTotal) {
+          profit = bet;
+          text = 'WIN · 死神を上回った';
+        } else if (pTotal < dTotal) {
+          profit = -bet;
+          text = 'LOSE · 魂が削られた';
+          isLoss = true;
+        } else {
+          profit = 0;
+          text = 'PUSH · 引き分け';
+        }
+
+        const newChips = chips + profit;
+        const newLives = isLoss ? lives - 1 : lives;
+        setChips(newChips);
+        setResultText(text);
+        setResultProfit(profit);
+        if (isLoss) setLives(newLives);
+        setPhase('result');
+
+        // 終了判定:3敗 or チップ0
+        if (newLives <= 0) {
+          setGameOverReason('lives');
+          setTimeout(() => setPhase('gameover'), 2400);
+        } else if (newChips <= 0) {
+          setGameOverReason('chips');
+          setTimeout(() => setPhase('gameover'), 2400);
+        }
+      };
+
+      const nextRound = () => {
+        setRound(r => r + 1);
+        setPlayerHand([]);
+        setDealerHand([]);
+        setResultText('');
+        setResultProfit(0);
+        // 賭け金を再調整
+        if (bet > chips) setBet(Math.max(1, Math.floor(chips * 0.1)));
+        setPhase('betting');
+      };
+
+      const playerTotal = handTotal(playerHand);
+      const dealerVisibleTotal = phase === 'playing' && dealerHand.length === 2
+        ? cardValue(dealerHand[0].rank)
+        : handTotal(dealerHand);
+
+      return (
+        <div
+          className="fixed inset-0 z-40 flex flex-col text-zinc-100 overflow-y-auto"
+          style={{
+            fontFamily: "'JetBrains Mono', 'Courier New', monospace",
+            background: 'radial-gradient(ellipse at center, #1c0808 0%, #000 70%)'
+          }}
+        >
+          {/* ヘッダー */}
+          <div className="px-4 py-3 border-b border-red-900/50 flex items-center justify-between">
+            <div>
+              <div className="text-red-700 text-[10px] tracking-[0.3em]">DEATH DEAL · ROUND {round + 1}</div>
+              <div className="text-2xl font-black text-red-400" style={{ textShadow: '0 0 8px rgba(220,38,38,0.5)' }}>
+                {chips.toLocaleString()} <span className="text-xs text-red-700">魂</span>
+              </div>
+            </div>
+            <div className="flex flex-col items-end gap-1">
+              <div className="text-red-700 text-[10px] tracking-[0.3em]">LIFE</div>
+              <div className="text-xl tracking-wider" style={{ lineHeight: 1 }}>
+                {[0, 1, 2].map(i => (
+                  <span
+                    key={i}
+                    style={{
+                      color: i < lives ? '#ef4444' : '#3f3f46',
+                      textShadow: i < lives ? '0 0 6px rgba(220,38,38,0.7)' : 'none',
+                      marginLeft: i > 0 ? 4 : 0,
+                    }}
+                  >
+                    ♥
+                  </span>
+                ))}
+              </div>
+              <button
+                onClick={onExit}
+                className="text-zinc-500 text-[10px] underline tracking-widest mt-1"
+              >
+                立ち去る
+              </button>
+            </div>
+          </div>
+
+          {/* 死神の手札 */}
+          <div className="px-4 py-3">
+            <div className="text-red-700 text-[10px] tracking-[0.3em] mb-2">
+              死神 {phase !== 'playing' && dealerHand.length > 0 && `[ ${handTotal(dealerHand)} ]`}
+            </div>
+            <div className="flex gap-2 justify-center min-h-[90px]">
+              {dealerHand.map((c, i) => (
+                <PlayingCard
+                  key={i}
+                  card={c}
+                  hidden={phase === 'playing' && i === 1}
+                />
+              ))}
+              {dealerHand.length === 0 && phase === 'betting' && (
+                <div className="text-zinc-700 text-xs flex items-center">死神が次の獲物を待っている・・・</div>
+              )}
+            </div>
+          </div>
+
+          {/* 結果表示 */}
+          {phase === 'result' && (
+            <div className="text-center py-3" style={{ animation: 'unlockShake 0.5s ease-in-out' }}>
+              <div
+                className={`text-2xl font-black tracking-wider ${resultProfit > 0 ? 'text-amber-400' : resultProfit < 0 ? 'text-red-500' : 'text-zinc-400'}`}
+                style={{ textShadow: '0 0 12px currentColor' }}
+              >
+                {resultText}
+              </div>
+              {resultProfit !== 0 && (
+                <div className={`text-sm mt-1 ${resultProfit > 0 ? 'text-amber-400' : 'text-red-400'}`}>
+                  {resultProfit > 0 ? '+' : ''}{resultProfit.toLocaleString()} 魂
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* プレイヤーの手札 */}
+          <div className="px-4 py-3">
+            <div className="text-amber-400 text-[10px] tracking-[0.3em] mb-2">
+              YOU {playerHand.length > 0 && `[ ${playerTotal} ]`}
+            </div>
+            <div className="flex gap-2 justify-center min-h-[90px]">
+              {playerHand.map((c, i) => (
+                <PlayingCard key={i} card={c} />
+              ))}
+            </div>
+          </div>
+
+          {/* 操作エリア */}
+          <div className="mt-auto px-4 pb-6 pt-3 border-t border-red-900/30">
+            {phase === 'betting' && (
+              <>
+                <div className="text-[10px] tracking-widest text-zinc-500 mb-2">BET</div>
+                <div className="grid grid-cols-4 gap-1.5 mb-3">
+                  {betOptions.map(opt => (
+                    <button
+                      key={opt.label}
+                      onClick={() => setBet(opt.value)}
+                      className={`py-2.5 text-xs font-bold border ${
+                        bet === opt.value
+                          ? 'border-red-500 bg-red-900/30 text-red-300'
+                          : 'border-zinc-800 text-zinc-500'
+                      }`}
+                    >
+                      {opt.label}
+                      <div className="text-[9px] mt-0.5">{opt.value.toLocaleString()}</div>
+                    </button>
+                  ))}
+                </div>
+                <button
+                  onClick={startRound}
+                  disabled={bet <= 0 || bet > chips}
+                  className="w-full py-4 bg-red-700 active:bg-red-800 text-red-100 font-black tracking-widest border border-red-600 disabled:bg-zinc-800 disabled:text-zinc-600 disabled:border-zinc-800"
+                  style={bet > 0 && bet <= chips ? { textShadow: '0 0 6px rgba(254,202,202,0.6)' } : undefined}
+                >
+                  ☠ DEAL ☠
+                </button>
+              </>
+            )}
+
+            {phase === 'playing' && (
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  onClick={hit}
+                  className="py-5 bg-red-700 active:bg-red-800 text-red-100 font-black tracking-widest border border-red-600"
+                  style={{ textShadow: '0 0 6px rgba(254,202,202,0.6)' }}
+                >
+                  HIT
+                </button>
+                <button
+                  onClick={() => stand()}
+                  className="py-5 bg-black active:bg-zinc-900 text-red-300 font-black tracking-widest border border-red-700"
+                >
+                  STAND
+                </button>
+              </div>
+            )}
+
+            {phase === 'dealer' && (
+              <div className="text-center text-zinc-500 text-sm py-4 tracking-widest animate-pulse">
+                死神がカードを引く・・・
+              </div>
+            )}
+
+            {phase === 'result' && (
+              <button
+                onClick={nextRound}
+                className="w-full py-4 bg-red-900 active:bg-red-950 text-red-100 font-black tracking-widest border border-red-700"
+              >
+                NEXT ROUND →
+              </button>
+            )}
+          </div>
+
+          {/* ゲームオーバー */}
+          {phase === 'gameover' && (
+            <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-black/95 p-6">
+              <div className="border-l-4 border-red-700 pl-4 mb-8 self-start">
+                <div className="text-red-700 text-[10px] tracking-[0.5em] mb-2">// {gameOverReason === 'lives' ? 'THIRD DEFEAT' : 'SOUL DEPLETED'}</div>
+                <h1 className="text-5xl font-black text-red-500" style={{ textShadow: '0 0 20px rgba(220,38,38,0.6)' }}>
+                  {gameOverReason === 'lives' ? '三度敗れた' : '失われた'}
+                </h1>
+                <div className="text-zinc-500 text-xs mt-3">
+                  {gameOverReason === 'lives'
+                    ? '死神の宣告通り、お前は魂を差し出した。'
+                    : '魂は死神のものとなった。'}
+                </div>
+              </div>
+
+              <div className="w-full max-w-xs space-y-3 mb-8">
+                <div className="border border-zinc-800 p-4">
+                  <div className="text-[10px] tracking-widest text-zinc-500 mb-1">PEAK SOULS</div>
+                  <div className="text-2xl font-black text-amber-400">{highChips.toLocaleString()}</div>
+                </div>
+                <div className="border border-zinc-800 p-4">
+                  <div className="text-[10px] tracking-widest text-zinc-500 mb-1">ROUNDS PLAYED</div>
+                  <div className="text-2xl font-black">{round + 1}</div>
+                </div>
+              </div>
+
+              <button
+                onClick={onExit}
+                className="w-full max-w-xs py-4 bg-amber-400 text-zinc-950 font-black tracking-widest active:bg-amber-500"
+              >
+                SESSA Trading に戻る →
+              </button>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    function TradeGame() {
+      const [phase, setPhase] = useState('start'); // start, customSetup, playing, gameover, timeup
+      const [mode, setMode] = useState('normal'); // normal | custom | death
+      const [deathUnlocked, setDeathUnlocked] = useState(false);
+      const [dClickCount, setDClickCount] = useState(0);
+      const [showUnlockOverlay, setShowUnlockOverlay] = useState(false);
+      // DEATH MODE クリア後の死神対話 → ブラックジャック
+      const [inReaperDialogue, setInReaperDialogue] = useState(false);
+      const [inBlackjack, setInBlackjack] = useState(false);
+      const [bjInitialChips, setBjInitialChips] = useState(0);
+      // デバッグ:タイトルの「g」5回連打で死神フェーズ直行
+      const [gDebugCount, setGDebugCount] = useState(0);
+      const [customTimeLimit, setCustomTimeLimit] = useState(360); // カスタム時の制限tick数
+      const [customStocks, setCustomStocks] = useState([
+        { name: '銘柄1', risk: 'low' },
+        { name: '銘柄2', risk: 'mid' },
+        { name: '銘柄3', risk: 'high' },
+      ]);
+      const [activeStocks, setActiveStocks] = useState(STOCKS); // 実際にゲームで使う銘柄(オブジェクト形式)
+      const [leverage, setLeverage] = useState(1);
+      const [cash, setCash] = useState(INITIAL_CASH);
+      const [borrowed, setBorrowed] = useState(0);
+      const [holdings, setHoldings] = useState({});
+      const [avgCost, setAvgCost] = useState({});
+      const [prices, setPrices] = useState({});
+      const [priceHistory, setPriceHistory] = useState([]);
+      const [tick, setTick] = useState(0);
+      const [selectedStock, setSelectedStock] = useState('soga');
+      const [tradeAmount, setTradeAmount] = useState(100000);
+      const [news, setNews] = useState([]);
+      const [marketEvent, setMarketEvent] = useState(null);
+      const [highScore, setHighScore] = useState(INITIAL_CASH);
+      const [flash, setFlash] = useState(null);
+      const [newsPanelOpen, setNewsPanelOpen] = useState(false);
+      const [unreadNews, setUnreadNews] = useState(0);
+      const [toast, setToast] = useState(null);
+      const [chartMode, setChartMode] = useState('individual'); // individual | all
+      const [hiddenSeries, setHiddenSeries] = useState({}); // { stockKey: true } で非表示
+
+      const tickRef = useRef(0);
+      const touchStartX = useRef(null);
+
+      // 銘柄キーリスト
+      const stockKeys = Object.keys(activeStocks);
+      // モードごとのパラメータ
+      const isDeath = mode === 'death';
+      const effectiveTimeLimit = mode === 'custom' ? customTimeLimit : (isDeath ? DEATH_TIME_LIMIT : TIME_LIMIT_TICKS);
+      const effectiveNewsChance = isDeath ? DEATH_NEWS_CHANCE : NEWS_CHANCE;
+      const effectiveMarketChance = isDeath ? DEATH_MARKET_CHANCE : MARKET_EVENT_CHANCE;
+      const effectiveGameOverThreshold = isDeath ? DEATH_GAME_OVER_THRESHOLD : GAME_OVER_THRESHOLD;
+      const effectiveInitialCash = isDeath ? DEATH_INITIAL_CASH : INITIAL_CASH;
+
+      // 時間が長いほど難易度UP(緩くならないように)
+      const difficulty = (() => {
+        if (isDeath) {
+          // デスモード:全てが激化
+          return { volMult: 1.5, newsRate: DEATH_NEWS_CHANCE, marketRate: DEATH_MARKET_CHANCE };
+        }
+        if (effectiveTimeLimit <= 360) {
+          return { volMult: 1.0, newsRate: NEWS_CHANCE, marketRate: MARKET_EVENT_CHANCE };
+        } else if (effectiveTimeLimit <= 600) {
+          return { volMult: 1.15, newsRate: 0.07, marketRate: 0.025 };
+        } else {
+          return { volMult: 1.3, newsRate: 0.08, marketRate: 0.03 };
+        }
+      })();
+
+      const totalAssets =
+        cash +
+        stockKeys.reduce((sum, key) => sum + (holdings[key] || 0) * (prices[key] || 0), 0) -
+        borrowed;
+
+      useEffect(() => {
+        if (phase !== 'playing') return;
+
+        const interval = setInterval(() => {
+          tickRef.current += 1;
+          setTick(tickRef.current);
+
+          setPrices(prev => {
+            const next = { ...prev };
+            stockKeys.forEach(key => {
+              const stock = activeStocks[key];
+              const random = (Math.random() - 0.5) * 2;
+              let change = stock.drift + random * stock.volatility * difficulty.volMult;
+              if (marketEvent) {
+                change += marketEvent.impact / marketEvent.duration;
+              }
+              next[key] = Math.max(10, prev[key] * (1 + change));
+            });
+            return next;
+          });
+
+          if (Math.random() < difficulty.newsRate) {
+            let event;
+            if (isDeath) {
+              const nev = DEATH_NEWS[Math.floor(Math.random() * DEATH_NEWS.length)];
+              event = { ...nev };
+            } else if (mode === 'normal') {
+              const nev = NEWS_EVENTS[Math.floor(Math.random() * NEWS_EVENTS.length)];
+              event = { ...nev };
+            } else {
+              const targetKey = stockKeys[Math.floor(Math.random() * stockKeys.length)];
+              const targetStock = activeStocks[targetKey];
+              const templates = NEWS_TEMPLATES[targetStock.risk];
+              const tpl = templates[Math.floor(Math.random() * templates.length)];
+              event = {
+                stock: targetKey,
+                impact: tpl.impact,
+                text: tpl.text.replace('[NAME]', targetStock.name),
+                positive: tpl.positive
+              };
+            }
+            setPrices(prev => ({
+              ...prev,
+              [event.stock]: prev[event.stock] * (1 + event.impact)
+            }));
+            const newsItem = { id: Date.now(), text: event.text, positive: event.positive, tick: tickRef.current };
+            setNews(prev => [newsItem, ...prev].slice(0, 20));
+            setToast({ ...newsItem, isMarket: false });
+            if (!newsPanelOpen) setUnreadNews(n => n + 1);
+          }
+
+          if (!marketEvent && Math.random() < difficulty.marketRate) {
+            const eventPool = isDeath ? DEATH_MARKET_EVENTS : MARKET_EVENTS;
+            const event = eventPool[Math.floor(Math.random() * eventPool.length)];
+            setMarketEvent({ ...event, remaining: event.duration });
+            const newsItem = { id: Date.now(), text: event.text, positive: event.impact > 0, tick: tickRef.current, isMarket: true };
+            setNews(prev => [newsItem, ...prev].slice(0, 20));
+            setToast(newsItem);
+            if (!newsPanelOpen) setUnreadNews(n => n + 1);
+          } else if (marketEvent) {
+            setMarketEvent(prev => {
+              if (!prev) return null;
+              const remaining = prev.remaining - 1;
+              if (remaining <= 0) return null;
+              return { ...prev, remaining };
+            });
+          }
+        }, TICK_INTERVAL);
+
+        return () => clearInterval(interval);
+      }, [phase, marketEvent, newsPanelOpen, mode, activeStocks]);
+
+      // トースト自動消去
+      useEffect(() => {
+        if (!toast) return;
+        const timer = setTimeout(() => {
+          setToast(prev => (prev && prev.id === toast.id) ? null : prev);
+        }, 5000);
+        return () => clearTimeout(timer);
+      }, [toast]);
+
+      useEffect(() => {
+        if (phase !== 'playing') return;
+        setPriceHistory(prev => [
+          ...prev,
+          { tick, ...prices }
+        ].slice(-80));
+      }, [tick, phase]);
+
+      useEffect(() => {
+        if (phase !== 'playing') return;
+        if (totalAssets > highScore) setHighScore(totalAssets);
+        if (totalAssets < effectiveGameOverThreshold) {
+          setPhase('gameover');
+        } else if (tick >= effectiveTimeLimit) {
+          let finalCash = cash;
+          let finalBorrowed = borrowed;
+          stockKeys.forEach(key => {
+            if (holdings[key] > 0) {
+              const proceeds = holdings[key] * prices[key];
+              if (finalBorrowed > 0) {
+                const repay = Math.min(finalBorrowed, proceeds);
+                finalBorrowed -= repay;
+                finalCash += proceeds - repay;
+              } else {
+                finalCash += proceeds;
+              }
+            }
+          });
+          setCash(finalCash);
+          setBorrowed(finalBorrowed);
+          const zeroHoldings = {};
+          stockKeys.forEach(k => zeroHoldings[k] = 0);
+          setHoldings(zeroHoldings);
+          // DEATH MODE プラス収支で時間切れ → 死神対話
+          const finalAssetsCheck = finalCash - finalBorrowed;
+          if (isDeath && finalAssetsCheck > effectiveInitialCash) {
+            setBjInitialChips(finalAssetsCheck);
+            setInReaperDialogue(true);
+          }
+          setPhase('timeup');
+        }
+      }, [totalAssets, phase, tick, effectiveTimeLimit, effectiveGameOverThreshold]);
+
+      // ノーマルモード開始
+      const startNormalGame = () => {
+        setMode('normal');
+        setActiveStocks(STOCKS);
+        const keys = Object.keys(STOCKS);
+        const initPrices = {};
+        const initHoldings = {};
+        const initAvg = {};
+        keys.forEach(k => {
+          initPrices[k] = STOCKS[k].initialPrice;
+          initHoldings[k] = 0;
+          initAvg[k] = 0;
+        });
+        setPrices(initPrices);
+        setHoldings(initHoldings);
+        setAvgCost(initAvg);
+        setSelectedStock(keys[0]);
+        resetGameState();
+        setPhase('playing');
+      };
+
+      // カスタムモード開始(設定済みのcustomStocksから生成)
+      const startCustomGame = () => {
+        const newStocks = {};
+        const initPrices = {};
+        const initHoldings = {};
+        const initAvg = {};
+        customStocks.forEach((s, i) => {
+          const key = 'custom_' + i;
+          const preset = RISK_PRESETS[s.risk];
+          // 初期価格は500〜1500のランダムで決める
+          const initPrice = 500 + Math.floor(Math.random() * 1000);
+          newStocks[key] = {
+            name: s.name || ('銘柄' + (i + 1)),
+            ticker: generateTicker(s.name, i),
+            initialPrice: initPrice,
+            volatility: preset.volatility,
+            drift: preset.drift,
+            color: preset.color,
+            desc: preset.desc,
+            risk: s.risk
+          };
+          initPrices[key] = initPrice;
+          initHoldings[key] = 0;
+          initAvg[key] = 0;
+        });
+        setMode('custom');
+        setActiveStocks(newStocks);
+        setPrices(initPrices);
+        setHoldings(initHoldings);
+        setAvgCost(initAvg);
+        setSelectedStock(Object.keys(newStocks)[0]);
+        resetGameState();
+        setPhase('playing');
+      };
+
+      // ゲーム共通リセット処理
+      const resetGameState = (initCash = INITIAL_CASH, initDebt = 0) => {
+        setCash(initCash);
+        setBorrowed(initDebt);
+        setPriceHistory([]);
+        setNews([]);
+        setMarketEvent(null);
+        setHighScore(initCash - initDebt);
+        setUnreadNews(0);
+        tickRef.current = 0;
+        setTick(0);
+      };
+
+      // デスモード開始(Sランク達成者専用)
+      const startDeathGame = () => {
+        setMode('death');
+        setActiveStocks(DEATH_STOCKS);
+        const keys = Object.keys(DEATH_STOCKS);
+        const initPrices = {};
+        const initHoldings = {};
+        const initAvg = {};
+        keys.forEach(k => {
+          initPrices[k] = DEATH_STOCKS[k].initialPrice;
+          initHoldings[k] = 0;
+          initAvg[k] = 0;
+        });
+        setPrices(initPrices);
+        setHoldings(initHoldings);
+        setAvgCost(initAvg);
+        setSelectedStock(keys[0]);
+        // デスモードはレバレッジ×1固定(資産勝負)
+        setLeverage(1);
+        resetGameState(DEATH_INITIAL_CASH, DEATH_INITIAL_DEBT);
+        setPhase('playing');
+      };
+
+      const handleBuy = () => {
+        const price = prices[selectedStock];
+        const cost = tradeAmount;
+        const buyingPower = cash * leverage;
+        if (cost > buyingPower) {
+          setFlash({ text: '購買力不足', error: true });
+          setTimeout(() => setFlash(null), 1200);
+          return;
+        }
+        const shares = cost / price;
+        const oldShares = holdings[selectedStock];
+        const newShares = oldShares + shares;
+        const newAvg = (oldShares * avgCost[selectedStock] + cost) / newShares;
+        setAvgCost(prev => ({ ...prev, [selectedStock]: newAvg }));
+        setHoldings(prev => ({ ...prev, [selectedStock]: newShares }));
+
+        if (cost <= cash) {
+          setCash(c => c - cost);
+        } else {
+          const fromBorrow = cost - cash;
+          setCash(0);
+          setBorrowed(b => b + fromBorrow);
+        }
+        setFlash({ text: `+${shares.toFixed(2)}株`, error: false });
+        setTimeout(() => setFlash(null), 1200);
+      };
+
+      const handleSell = () => {
+        const price = prices[selectedStock];
+        const shares = holdings[selectedStock];
+        if (shares <= 0) {
+          setFlash({ text: '保有なし', error: true });
+          setTimeout(() => setFlash(null), 1200);
+          return;
+        }
+        const proceeds = shares * price;
+        let remaining = proceeds;
+        if (borrowed > 0) {
+          const repay = Math.min(borrowed, remaining);
+          setBorrowed(b => b - repay);
+          remaining -= repay;
+        }
+        setCash(c => c + remaining);
+        setHoldings(prev => ({ ...prev, [selectedStock]: 0 }));
+        setAvgCost(prev => ({ ...prev, [selectedStock]: 0 }));
+        setFlash({ text: `¥${Math.floor(proceeds).toLocaleString()}`, error: false });
+        setTimeout(() => setFlash(null), 1200);
+      };
+
+      const openNews = () => {
+        setNewsPanelOpen(true);
+        setUnreadNews(0);
+      };
+
+      const handleTouchStart = (e) => {
+        touchStartX.current = e.touches[0].clientX;
+      };
+      const handleTouchEnd = (e) => {
+        if (touchStartX.current === null) return;
+        const diff = touchStartX.current - e.changedTouches[0].clientX;
+        if (diff > 60 && !newsPanelOpen) {
+          openNews();
+        } else if (diff < -60 && newsPanelOpen) {
+          setNewsPanelOpen(false);
+        }
+        touchStartX.current = null;
+      };
+
+      // ===== 死神対話 =====
+      if (inReaperDialogue) {
+        return (
+          <ReaperDialogue
+            resultData={{
+              finalAssets: bjInitialChips,
+              initialCash: DEATH_INITIAL_CASH
+            }}
+            onAccept={() => {
+              setInReaperDialogue(false);
+              setInBlackjack(true);
+            }}
+            onDecline={() => {
+              setInReaperDialogue(false);
+            }}
+          />
+        );
+      }
+
+      // ===== ブラックジャック =====
+      if (inBlackjack) {
+        return (
+          <BlackjackGame
+            initialChips={bjInitialChips}
+            onExit={() => {
+              setInBlackjack(false);
+            }}
+          />
+        );
+      }
+
+      // ===== スタート画面 =====
+      if (phase === 'start') {
+        const isDeathMode = mode === 'death';
+        // デスモード選択時の配色
+        const accentColor = isDeathMode ? '#dc2626' : '#fbbf24';
+        const accentBg = isDeathMode ? 'bg-red-600' : 'bg-amber-400';
+        const accentText = isDeathMode ? 'text-red-500' : 'text-amber-400';
+        const accentBorder = isDeathMode ? 'border-red-600' : 'border-amber-400';
+        const accentActiveBg = isDeathMode ? 'active:bg-red-700' : 'active:bg-amber-500';
+
+        return (
+          <div className={`min-h-screen ${isDeathMode ? 'bg-black' : 'bg-zinc-950'} text-zinc-100 flex flex-col p-5 transition-colors`}>
+            <div className="flex-1 flex flex-col justify-center">
+              <div className={`border-l-4 pl-4 mb-8 ${accentBorder}`}>
+                <div className={`text-[10px] tracking-[0.3em] mb-2 ${accentText}`}>
+                  {isDeathMode ? '☠ DEATH MODE / SYSTEM v∞ ☠' : 'SESSA TRADING SYSTEM v0.3'}
+                </div>
+                <h1 className="text-4xl font-black tracking-tight leading-tight">
+                  {isDeathMode ? (
+                    <>
+                      <span className="text-red-700">死</span><span className="text-red-500">の</span><span className="text-red-700">取</span><span className="text-red-500">引</span>
+                      <br/>
+                      <span className="text-red-600 text-2xl">DEATH TRADING</span>
+                    </>
+                  ) : (
+                    <>
+                      SESSA<br/>
+                      <span className="text-amber-400">
+                        Tra
+                        <span
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const next = dClickCount + 1;
+                            setDClickCount(next);
+                            if (next >= 4 && !deathUnlocked) {
+                              unlockDeathMode();
+                              setDeathUnlocked(true);
+                              setShowUnlockOverlay(true);
+                              setTimeout(() => setShowUnlockOverlay(false), 2500);
+                            }
+                          }}
+                          className="cursor-pointer select-none"
+                          style={{ WebkitTapHighlightColor: 'transparent' }}
+                        >d</span>
+                        in
+                        <span
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const next = gDebugCount + 1;
+                            setGDebugCount(next);
+                            if (next >= 5) {
+                              // 死神フェーズ直行(デバッグ用)
+                              setBjInitialChips(750000); // ダミー資産
+                              setInReaperDialogue(true);
+                              setGDebugCount(0);
+                            }
+                          }}
+                          className="cursor-pointer select-none"
+                          style={{ WebkitTapHighlightColor: 'transparent' }}
+                        >g</span>
+                      </span>
+                    </>
+                  )}
+                </h1>
+                <div className={`text-xs mt-3 ${isDeathMode ? 'text-red-900' : 'text-zinc-500'}`}>
+                  {isDeathMode ? '生還者なし。お前も例外ではない。' : '3分間の取引、生き残れるか。'}
+                </div>
+              </div>
+
+              <div className="space-y-5">
+                {/* モード選択 */}
+                <div>
+                  <div className="text-[10px] tracking-widest text-zinc-500 mb-3">SELECT MODE</div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      onClick={() => setMode('normal')}
+                      className={`py-4 border-2 transition-all ${mode === 'normal' ? 'border-amber-400 bg-amber-400/10 text-amber-400' : 'border-zinc-800 text-zinc-400'}`}
+                    >
+                      <div className="text-base font-black">NORMAL</div>
+                      <div className="text-[9px] tracking-widest mt-1">5銘柄プリセット</div>
+                    </button>
+                    <button
+                      onClick={() => setMode('custom')}
+                      className={`py-4 border-2 transition-all ${mode === 'custom' ? 'border-amber-400 bg-amber-400/10 text-amber-400' : 'border-zinc-800 text-zinc-400'}`}
+                    >
+                      <div className="text-base font-black">CUSTOM</div>
+                      <div className="text-[9px] tracking-widest mt-1">自分で銘柄作成</div>
+                    </button>
+                  </div>
+                  {/* デスモード(Sランク達成者専用) */}
+                  {deathUnlocked && (
+                    <button
+                      onClick={() => setMode('death')}
+                      className={`w-full mt-2 py-4 border-2 transition-all ${mode === 'death' ? 'border-red-600 bg-red-900/20 text-red-500' : 'border-red-900/50 text-red-700 bg-black/50'}`}
+                      style={{
+                        background: mode === 'death' ? 'linear-gradient(90deg, rgba(127,29,29,0.3), rgba(0,0,0,0.6), rgba(127,29,29,0.3))' : undefined
+                      }}
+                    >
+                      <div className="text-base font-black tracking-wider">☠ DEATH MODE ☠</div>
+                      <div className="text-[9px] tracking-widest mt-1">魂を懸けし者のみ</div>
+                    </button>
+                  )}
+                </div>
+
+                {/* レバレッジ選択(デスモードでは無効化、強制×5) */}
+                {!isDeathMode && (
+                  <div>
+                    <div className="text-[10px] tracking-widest text-zinc-500 mb-3">SELECT LEVERAGE</div>
+                    <div className="grid grid-cols-3 gap-2">
+                      {[1, 3, 5].map(lev => (
+                        <button
+                          key={lev}
+                          onClick={() => setLeverage(lev)}
+                          className={`py-5 border-2 transition-all ${
+                            leverage === lev
+                              ? 'border-amber-400 bg-amber-400/10 text-amber-400'
+                              : 'border-zinc-800 text-zinc-400'
+                          }`}
+                        >
+                          <div className="text-2xl font-black">×{lev}</div>
+                          <div className="text-[9px] tracking-widest mt-1">
+                            {lev === 1 ? 'SAFE' : lev === 3 ? 'BALANCED' : 'AGGRESSIVE'}
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {isDeathMode ? (
+                  <div className="bg-black border border-red-900/60 p-4 text-xs space-y-2 shadow-[0_0_20px_rgba(220,38,38,0.15)_inset]">
+                    <div className="flex justify-between"><span className="text-red-900">制限時間</span><span className="text-red-500">3:00</span></div>
+                    <div className="flex justify-between"><span className="text-red-900">初期資金</span><span className="text-red-400">¥{DEATH_INITIAL_CASH.toLocaleString()}</span></div>
+                    <div className="flex justify-between"><span className="text-red-900">破産ライン</span><span className="text-red-700">¥{DEATH_GAME_OVER_THRESHOLD.toLocaleString()}</span></div>
+                    <div className="flex justify-between"><span className="text-red-900">レバレッジ</span><span className="text-red-500">×1(固定)</span></div>
+                    <div className="text-[10px] text-red-900 pt-1 border-t border-red-900/40">死神商事・虚無コーポ・地獄ファイアHDの三銘柄</div>
+                  </div>
+                ) : (
+                  <div className="bg-zinc-900/50 border border-zinc-800 p-4 text-xs space-y-2">
+                    <div className="flex justify-between"><span className="text-zinc-500">制限時間</span><span className="text-amber-400">3:00</span></div>
+                    <div className="flex justify-between"><span className="text-zinc-500">初期資金</span><span>¥{INITIAL_CASH.toLocaleString()}</span></div>
+                    <div className="flex justify-between"><span className="text-zinc-500">破産ライン</span><span className="text-red-400">¥{GAME_OVER_THRESHOLD.toLocaleString()}</span></div>
+                    <div className="flex justify-between"><span className="text-zinc-500">購買力</span><span className="text-amber-400">¥{(INITIAL_CASH * leverage).toLocaleString()}</span></div>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <button
+              onClick={() => {
+                if (mode === 'normal') startNormalGame();
+                else if (mode === 'death') startDeathGame();
+                else setPhase('customSetup');
+              }}
+              className={`w-full py-5 ${accentBg} text-zinc-950 font-black tracking-widest ${accentActiveBg} mb-20 ${isDeathMode ? 'text-red-100' : ''}`}
+              style={isDeathMode ? { textShadow: '0 0 8px #fee2e2' } : undefined}
+            >
+              {mode === 'normal' ? 'ENTER MARKET →' : mode === 'death' ? '☠ ENTER THE VOID ☠' : 'CUSTOMIZE →'}
+            </button>
+
+            {/* DEATH MODE 解放演出 */}
+            {showUnlockOverlay && (
+              <div
+                className="fixed inset-0 z-50 flex items-center justify-center cursor-pointer"
+                onClick={() => setShowUnlockOverlay(false)}
+                style={{
+                  background: 'radial-gradient(ellipse at center, rgba(127,29,29,0.4), rgba(0,0,0,0.92) 60%)',
+                  animation: 'unlockFadeIn 0.4s ease-out'
+                }}
+              >
+                <div className="text-center px-6" style={{ animation: 'unlockShake 0.5s ease-in-out' }}>
+                  <div className="text-red-700 text-[10px] tracking-[0.5em] mb-3">// ACCESS GRANTED</div>
+                  <div
+                    className="text-red-500 text-3xl font-black tracking-wider mb-2"
+                    style={{ textShadow: '0 0 20px rgba(220,38,38,0.8), 0 0 40px rgba(127,29,29,0.6)' }}
+                  >
+                    ☠ DEATH MODE ☠
+                  </div>
+                  <div className="text-red-300 text-base font-bold tracking-widest mb-4">UNLOCKED</div>
+                  <div className="text-red-900 text-[10px] tracking-widest">魂の取引が解放された</div>
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      }
+
+      // ===== カスタム設定画面 =====
+      if (phase === 'customSetup') {
+        const updateStock = (i, field, value) => {
+          setCustomStocks(prev => prev.map((s, idx) => idx === i ? { ...s, [field]: value } : s));
+        };
+        const addStock = () => {
+          if (customStocks.length >= 5) return;
+          setCustomStocks(prev => [...prev, { name: '銘柄' + (prev.length + 1), risk: 'mid' }]);
+        };
+        const removeStock = (i) => {
+          if (customStocks.length <= 1) return;
+          setCustomStocks(prev => prev.filter((_, idx) => idx !== i));
+        };
+
+        return (
+          <div className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col p-5">
+            <div className="border-l-4 border-amber-400 pl-4 mb-5">
+              <div className="text-amber-400 text-[10px] tracking-[0.3em] mb-2">// CUSTOM SETUP</div>
+              <h1 className="text-2xl font-black tracking-tight">銘柄をカスタマイズ</h1>
+              <div className="text-zinc-500 text-xs mt-2">1〜5銘柄、それぞれ名前とリスク度を設定</div>
+            </div>
+
+            {/* 制限時間選択 */}
+            <div className="mb-4">
+              <div className="text-[10px] tracking-widest text-zinc-500 mb-2">TIME LIMIT</div>
+              <div className="grid grid-cols-4 gap-1.5">
+                {[
+                  { ticks: 120, label: '1:00' },
+                  { ticks: 360, label: '3:00' },
+                  { ticks: 600, label: '5:00' },
+                  { ticks: 1200, label: '10:00' },
+                ].map(opt => (
+                  <button
+                    key={opt.ticks}
+                    onClick={() => setCustomTimeLimit(opt.ticks)}
+                    className={`py-3 text-sm font-bold border-2 transition-all ${
+                      customTimeLimit === opt.ticks
+                        ? 'border-amber-400 bg-amber-400/10 text-amber-400'
+                        : 'border-zinc-800 text-zinc-500'
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto space-y-3 mb-4">
+              {customStocks.map((s, i) => {
+                const preset = RISK_PRESETS[s.risk];
+                return (
+                  <div key={i} className="border-2 border-zinc-800 p-3 space-y-2" style={{ borderLeftColor: preset.color, borderLeftWidth: 4 }}>
+                    <div className="flex items-center gap-2">
+                      <div className="text-[10px] text-zinc-500 tracking-widest">#{i + 1}</div>
+                      <input
+                        type="text"
+                        value={s.name}
+                        maxLength={20}
+                        onChange={(e) => updateStock(i, 'name', e.target.value)}
+                        placeholder="銘柄名"
+                        className="flex-1 bg-zinc-900 border border-zinc-800 px-2 py-2 text-sm focus:outline-none focus:border-amber-400"
+                        style={{ fontFamily: "'JetBrains Mono', 'Courier New', monospace" }}
+                      />
+                      {customStocks.length > 1 && (
+                        <button
+                          onClick={() => removeStock(i)}
+                          className="w-9 h-9 border border-zinc-800 text-zinc-500 active:border-red-500 active:text-red-500"
+                        >
+                          ✕
+                        </button>
+                      )}
+                    </div>
+                    <div className="grid grid-cols-4 gap-1">
+                      {Object.keys(RISK_PRESETS).map(rk => {
+                        const rp = RISK_PRESETS[rk];
+                        return (
+                          <button
+                            key={rk}
+                            onClick={() => updateStock(i, 'risk', rk)}
+                            className={`py-2 text-xs font-bold border-2 transition-all ${
+                              s.risk === rk ? 'bg-zinc-800' : 'border-zinc-800 text-zinc-500'
+                            }`}
+                            style={s.risk === rk ? { borderColor: rp.color, color: rp.color } : {}}
+                          >
+                            {rp.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <div className="text-[10px] text-zinc-500">{preset.desc}</div>
+                  </div>
+                );
+              })}
+
+              {customStocks.length < 5 && (
+                <button
+                  onClick={addStock}
+                  className="w-full py-3 border-2 border-dashed border-zinc-800 text-zinc-500 text-sm active:border-amber-400 active:text-amber-400"
+                >
+                  + 銘柄を追加 ({customStocks.length}/5)
+                </button>
+              )}
+            </div>
+
+            <div className="grid grid-cols-2 gap-2 mb-20">
+              <button
+                onClick={() => setPhase('start')}
+                className="py-4 border-2 border-zinc-800 text-zinc-400 font-bold tracking-widest active:bg-zinc-900"
+              >
+                ← BACK
+              </button>
+              <button
+                onClick={startCustomGame}
+                className="py-4 bg-amber-400 text-zinc-950 font-black tracking-widest active:bg-amber-500"
+              >
+                START →
+              </button>
+            </div>
+          </div>
+        );
+      }
+
+
+      // ===== 時間切れ画面 =====
+      if (phase === 'timeup') {
+        const profit = totalAssets - INITIAL_CASH;
+        const profitPercent = (profit / INITIAL_CASH) * 100;
+        const isWin = profit > 0;
+        const rank = profitPercent >= 100 ? 'S' : profitPercent >= 50 ? 'A' : profitPercent >= 20 ? 'B' : profitPercent >= 0 ? 'C' : profitPercent >= -20 ? 'D' : 'E';
+        const rankColor = rank === 'S' ? 'text-amber-400' : rank === 'A' ? 'text-emerald-400' : rank === 'B' ? 'text-blue-400' : rank === 'C' ? 'text-zinc-300' : 'text-red-400';
+        const comment = rank === 'S' ? '伝説のトレーダー' : rank === 'A' ? '優秀な成績' : rank === 'B' ? '安定した運用' : rank === 'C' ? '無難な結果' : rank === 'D' ? '損失あり' : '大幅損失';
+
+        return (
+          <div className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col p-5">
+            <div className="flex-1 flex flex-col justify-center">
+              <div className={`border-l-4 pl-4 mb-8 ${isWin ? 'border-amber-400' : 'border-zinc-500'}`}>
+                <div className={`text-[10px] tracking-[0.3em] mb-2 ${isWin ? 'text-amber-400' : 'text-zinc-500'}`}>// SESSION COMPLETE</div>
+                <h1 className={`text-5xl font-black tracking-tight ${isWin ? 'text-amber-400' : 'text-zinc-300'}`}>TIME UP</h1>
+                <div className="text-zinc-500 text-xs mt-2">{Math.round(effectiveTimeLimit * TICK_INTERVAL / 60000 * 10) / 10}分間の取引が終了しました。</div>
+              </div>
+
+              <div className="border-2 border-zinc-800 p-5 mb-3 flex items-center justify-between">
+                <div>
+                  <div className="text-[10px] tracking-widest text-zinc-500 mb-1">RANK</div>
+                  <div className="text-xs text-zinc-400">{comment}</div>
+                </div>
+                <div className={`text-6xl font-black ${rankColor}`}>{rank}</div>
+              </div>
+
+              <div className="space-y-2 mb-6">
+                <div className="border border-zinc-800 p-4">
+                  <div className="text-[10px] tracking-widest text-zinc-500 mb-1">FINAL ASSETS</div>
+                  <div className={`text-2xl font-black ${isWin ? 'text-amber-400' : 'text-red-400'}`}>¥{Math.floor(totalAssets).toLocaleString()}</div>
+                  <div className={`text-xs mt-1 ${isWin ? 'text-emerald-400' : 'text-red-400'}`}>
+                    {profit >= 0 ? '+' : ''}¥{Math.floor(profit).toLocaleString()} ({profitPercent >= 0 ? '+' : ''}{profitPercent.toFixed(1)}%)
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="border border-zinc-800 p-3">
+                    <div className="text-[10px] tracking-widest text-zinc-500 mb-1">PEAK</div>
+                    <div className="text-base font-black text-amber-400">¥{Math.floor(highScore).toLocaleString()}</div>
+                  </div>
+                  <div className="border border-zinc-800 p-3">
+                    <div className="text-[10px] tracking-widest text-zinc-500 mb-1">LEVERAGE</div>
+                    <div className="text-base font-black">×{leverage}</div>
+                  </div>
+                </div>
+
+                {/* Sランク達成時の隠しヒント(デスモード未解放のときのみ) */}
+                {rank === 'S' && !deathUnlocked && (
+                  <div
+                    className="border border-red-900/50 bg-black/60 p-3 mt-3"
+                    style={{
+                      animation: 'unlockFadeIn 1.5s ease-out',
+                      boxShadow: 'inset 0 0 20px rgba(127,29,29,0.2)'
+                    }}
+                  >
+                    <div className="text-red-700 text-[10px] tracking-[0.3em] mb-1">// SYSTEM ANOMALY DETECTED</div>
+                    <div className="text-red-400 text-xs font-mono" style={{ textShadow: '0 0 4px rgba(220,38,38,0.4)' }}>
+                      &lt;Tra<span className="text-red-700 animate-pulse">*</span>ing&gt;... 文字列に欠陥がある。
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <button
+              onClick={() => setPhase('start')}
+              className="w-full py-5 bg-amber-400 text-zinc-950 font-black tracking-widest active:bg-amber-500 mb-20"
+            >
+              PLAY AGAIN →
+            </button>
+          </div>
+        );
+      }
+
+      // ===== ゲームオーバー(破産) =====
+      if (phase === 'gameover') {
+        return (
+          <div className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col p-5">
+            <div className="flex-1 flex flex-col justify-center">
+              <div className="border-l-4 border-red-500 pl-4 mb-8">
+                <div className="text-red-500 text-[10px] tracking-[0.3em] mb-2">// SYSTEM MESSAGE</div>
+                <h1 className="text-5xl font-black tracking-tight text-red-500">BANKRUPT</h1>
+                <div className="text-zinc-500 text-xs mt-2">市場から退場しました。</div>
+              </div>
+
+              <div className="space-y-3 mb-6">
+                <div className="border border-zinc-800 p-4">
+                  <div className="text-[10px] tracking-widest text-zinc-500 mb-1">FINAL ASSETS</div>
+                  <div className="text-2xl font-black text-red-400">¥{Math.floor(totalAssets).toLocaleString()}</div>
+                </div>
+                <div className="border border-zinc-800 p-4">
+                  <div className="text-[10px] tracking-widest text-zinc-500 mb-1">PEAK ASSETS</div>
+                  <div className="text-2xl font-black text-amber-400">¥{Math.floor(highScore).toLocaleString()}</div>
+                </div>
+                <div className="border border-zinc-800 p-4">
+                  <div className="text-[10px] tracking-widest text-zinc-500 mb-1">SURVIVED</div>
+                  <div className="text-2xl font-black">{tick} TICKS</div>
+                </div>
+              </div>
+            </div>
+
+            <button
+              onClick={() => setPhase('start')}
+              className="w-full py-5 bg-amber-400 text-zinc-950 font-black tracking-widest active:bg-amber-500 mb-20"
+            >
+              TRY AGAIN →
+            </button>
+          </div>
+        );
+      }
+
+      // ===== プレイ画面 =====
+      const stock = activeStocks[selectedStock];
+      const profitLoss = holdings[selectedStock] > 0
+        ? (prices[selectedStock] - avgCost[selectedStock]) * holdings[selectedStock]
+        : 0;
+      const profitLossPercent = holdings[selectedStock] > 0 && avgCost[selectedStock] > 0
+        ? ((prices[selectedStock] - avgCost[selectedStock]) / avgCost[selectedStock]) * 100
+        : 0;
+
+      const remaining = Math.max(0, effectiveTimeLimit - tick);
+      const seconds = Math.ceil(remaining * TICK_INTERVAL / 1000);
+      const mm = Math.floor(seconds / 60);
+      const ss = seconds % 60;
+      const isWarning = remaining <= 60;
+      const isCritical = remaining <= 20;
+      const progress = (remaining / effectiveTimeLimit) * 100;
+
+      return (
+        <div
+          className={`min-h-screen ${isDeath ? 'bg-black' : 'bg-zinc-950'} text-zinc-100 flex flex-col relative overflow-hidden`}
+          style={isDeath ? {
+            backgroundImage: 'radial-gradient(ellipse at top, rgba(127,29,29,0.15), transparent 50%), radial-gradient(ellipse at bottom, rgba(0,0,0,0.8), transparent 60%)'
+          } : undefined}
+          onTouchStart={handleTouchStart}
+          onTouchEnd={handleTouchEnd}
+        >
+          {/* ヘッダー */}
+          <div className="px-2 py-2 border-b border-zinc-800 flex items-center justify-between">
+            <div>
+              <div className="text-[9px] text-zinc-500 tracking-widest">TOTAL ASSETS · ×{leverage}</div>
+              <div className={`text-xl font-black ${totalAssets >= INITIAL_CASH ? 'text-amber-400' : 'text-red-400'}`}>
+                ¥{Math.floor(totalAssets).toLocaleString()}
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="text-right">
+                <div className="text-[9px] text-zinc-500 tracking-widest">TIME LEFT</div>
+                <div className={`text-xl font-black tabular-nums ${isCritical ? 'text-red-500 animate-pulse' : isWarning ? 'text-amber-400' : 'text-zinc-100'}`}>
+                  {mm}:{String(ss).padStart(2, '0')}
+                </div>
+                <div className="w-20 h-1 bg-zinc-800 mt-1 overflow-hidden">
+                  <div
+                    className={`h-full transition-all ${isCritical ? 'bg-red-500' : isWarning ? 'bg-amber-400' : 'bg-emerald-400'}`}
+                    style={{ width: `${progress}%` }}
+                  />
+                </div>
+              </div>
+              <button
+                onClick={openNews}
+                className="relative w-12 h-12 border-2 border-zinc-800 active:border-amber-400 flex items-center justify-center"
+              >
+                <span className="text-lg">📰</span>
+                {unreadNews > 0 && (
+                  <span className="absolute -top-1 -right-1 bg-red-500 text-white text-[10px] font-bold w-5 h-5 rounded-full flex items-center justify-center">
+                    {unreadNews > 9 ? '9+' : unreadNews}
+                  </span>
+                )}
+              </button>
+            </div>
+          </div>
+
+          {/* 現金・借入バー */}
+          <div className="px-2 py-1.5 border-b border-zinc-800 grid grid-cols-2 gap-2 text-xs">
+            <div className="flex items-baseline gap-2">
+              <span className="text-[9px] text-zinc-500 tracking-widest">CASH</span>
+              <span className="text-emerald-400 font-bold tabular-nums">
+                ¥{Math.floor(cash).toLocaleString()}
+              </span>
+            </div>
+            <div className="flex items-baseline gap-2 justify-end">
+              {borrowed > 0 ? (
+                <>
+                  <span className="text-[9px] text-red-400/70 tracking-widest">DEBT</span>
+                  <span className="text-red-400 font-bold tabular-nums">
+                    ¥{Math.floor(borrowed).toLocaleString()}
+                  </span>
+                </>
+              ) : (
+                <>
+                  <span className="text-[9px] text-zinc-500 tracking-widest">BUYING POWER</span>
+                  <span className="text-amber-400 font-bold tabular-nums">
+                    ¥{Math.floor(cash * leverage).toLocaleString()}
+                  </span>
+                </>
+              )}
+            </div>
+          </div>
+
+          {/* マーケットイベント進行中ステータス */}
+          {marketEvent && (
+            <div className={`px-2 py-1.5 text-[10px] border-b flex justify-between items-center ${marketEvent.impact > 0 ? 'border-emerald-400/40 bg-emerald-400/5 text-emerald-400' : 'border-red-500/40 bg-red-500/5 text-red-400'}`}>
+              <span className="tracking-widest">{marketEvent.impact > 0 ? '▲ MARKET BOOM' : '▼ MARKET PANIC'}</span>
+              <span className="text-zinc-500">残り{marketEvent.remaining}tick</span>
+            </div>
+          )}
+
+          {/* 銘柄スイッチャー(横スクロール対応タブ) */}
+          <div className="px-2 py-1.5 border-b border-zinc-800">
+            <div className="text-[9px] tracking-widest text-zinc-500 mb-1.5">MARKET</div>
+            <div className="flex gap-1.5 overflow-x-auto -mx-2 px-2 pb-1" style={{ scrollbarWidth: 'thin' }}>
+              {Object.keys(activeStocks).map(key => {
+                const s = activeStocks[key];
+                const isSelected = key === selectedStock;
+                const has = holdings[key] > 0;
+                return (
+                  <button
+                    key={key}
+                    onClick={() => setSelectedStock(key)}
+                    className={`flex-shrink-0 px-3 py-2 border-2 transition-all text-left ${
+                      isSelected ? 'border-amber-400 bg-amber-400/10' : 'border-zinc-800 bg-zinc-900/50'
+                    }`}
+                    style={{ minWidth: 110 }}
+                  >
+                    <div className="flex items-center gap-1">
+                      <div className="text-[9px] text-zinc-500 tracking-widest">{s.ticker}</div>
+                      {has && <div className="w-1.5 h-1.5 rounded-full bg-amber-400"></div>}
+                    </div>
+                    <div className="text-[11px] font-bold truncate" style={{ maxWidth: 100, color: isSelected ? s.color : '#d4d4d8' }}>
+                      {s.name}
+                    </div>
+                    <div className="text-xs font-bold tabular-nums" style={{ color: s.color }}>
+                      ¥{prices[key].toFixed(0)}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* 価格表示 */}
+          <div className="px-2 py-2 flex items-baseline justify-between">
+            <div>
+              <div className="text-[9px] text-zinc-500 tracking-widest">{stock.ticker}</div>
+              <div className="text-3xl font-black" style={{ color: stock.color }}>
+                ¥{prices[selectedStock].toFixed(0)}
+              </div>
+            </div>
+            {holdings[selectedStock] > 0 && (
+              <div className="text-right">
+                <div className="text-[9px] text-zinc-500 tracking-widest">P&L</div>
+                <div className={`text-lg font-bold ${profitLoss >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                  {profitLoss >= 0 ? '+' : ''}¥{Math.floor(profitLoss).toLocaleString()}
+                </div>
+                <div className={`text-[10px] ${profitLoss >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                  ({profitLossPercent >= 0 ? '+' : ''}{profitLossPercent.toFixed(2)}%)
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* チャート */}
+          <div className="px-2">
+            {/* モード切替トグル */}
+            <div className="flex justify-end px-2 mb-1">
+              <div className="inline-flex border border-zinc-800 text-[9px] tracking-widest">
+                <button
+                  onClick={() => setChartMode('individual')}
+                  className={`px-2 py-1 ${chartMode === 'individual' ? 'bg-amber-400 text-zinc-950 font-bold' : 'text-zinc-500'}`}
+                >
+                  INDIVIDUAL
+                </button>
+                <button
+                  onClick={() => setChartMode('all')}
+                  className={`px-2 py-1 ${chartMode === 'all' ? 'bg-amber-400 text-zinc-950 font-bold' : 'text-zinc-500'}`}
+                >
+                  ALL
+                </button>
+              </div>
+            </div>
+
+            {chartMode === 'individual' ? (
+              <SimpleChart
+                data={priceHistory}
+                dataKey={selectedStock}
+                color={stock.color}
+                refLine={holdings[selectedStock] > 0 && avgCost[selectedStock] > 0 ? avgCost[selectedStock] : null}
+                height={180}
+              />
+            ) : (
+              // 縦長チャートを横並び表示
+              <div
+                className="flex gap-1.5 overflow-x-auto pb-1"
+                style={{ scrollbarWidth: 'thin' }}
+              >
+                {stockKeys.map(k => {
+                  const s = activeStocks[k];
+                  const isSelected = k === selectedStock;
+                  // 銘柄数で1チャートの幅を決定(画面幅をうまく分割)
+                  // 1〜3銘柄なら均等割、4〜5銘柄なら横スクロール
+                  const colWidth = stockKeys.length <= 3
+                    ? `calc((100% - ${(stockKeys.length - 1) * 6}px) / ${stockKeys.length})`
+                    : '32%';
+                  return (
+                    <button
+                      key={k}
+                      onClick={() => setSelectedStock(k)}
+                      className={`flex-shrink-0 flex flex-col text-left border-2 transition-all ${
+                        isSelected ? 'border-amber-400 bg-amber-400/5' : 'border-zinc-800'
+                      }`}
+                      style={{ width: colWidth, minWidth: stockKeys.length > 3 ? 110 : undefined }}
+                    >
+                      {/* 上部:ティッカー・銘柄名 */}
+                      <div className="px-2 pt-1.5 pb-1">
+                        <div className="flex items-center gap-1">
+                          <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ backgroundColor: s.color }} />
+                          <span className="text-[9px] text-zinc-500 tracking-widest">{s.ticker}</span>
+                          {holdings[k] > 0 && (
+                            <span className="text-[9px] text-amber-400 ml-auto">●</span>
+                          )}
+                        </div>
+                        <div className="text-[10px] text-zinc-300 truncate leading-tight mt-0.5">
+                          {s.name}
+                        </div>
+                      </div>
+                      {/* 縦長チャート */}
+                      <SimpleChart
+                        data={priceHistory}
+                        dataKey={k}
+                        color={s.color}
+                        refLine={holdings[k] > 0 && avgCost[k] > 0 ? avgCost[k] : null}
+                        height={260}
+                        compact={true}
+                      />
+                      {/* 下部:現在価格 */}
+                      <div className="px-2 py-1 border-t border-zinc-800/50">
+                        <div className="text-sm font-bold tabular-nums truncate" style={{ color: s.color }}>
+                          ¥{prices[k].toFixed(0)}
+                        </div>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {chartMode === 'individual' && <div className="flex-1" />}
+
+          {/* 取引金額 */}
+          <div className="px-2 py-1.5">
+            <div className="text-[9px] tracking-widest text-zinc-500 mb-1.5">AMOUNT</div>
+            <div className="grid grid-cols-4 gap-1.5">
+              {[50000, 100000, 500000, 1000000].map(amt => (
+                <button
+                  key={amt}
+                  onClick={() => setTradeAmount(amt)}
+                  className={`py-2.5 text-xs font-bold border-2 ${
+                    tradeAmount === amt
+                      ? 'border-amber-400 text-amber-400 bg-amber-400/5'
+                      : 'border-zinc-800 text-zinc-500'
+                  }`}
+                >
+                  {amt / 10000}万
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* 投資・売却ボタン */}
+          <div className="px-2 pb-5 pt-2">
+            {flash && (
+              <div className={`mb-2 text-xs text-center ${flash.error ? 'text-red-400' : 'text-amber-400'}`}>
+                {flash.text}
+              </div>
+            )}
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                onClick={handleBuy}
+                className={`py-5 font-black tracking-widest text-base ${
+                  isDeath
+                    ? 'bg-red-900 active:bg-red-950 text-red-100 border border-red-700'
+                    : 'bg-emerald-500 active:bg-emerald-600 text-zinc-950'
+                }`}
+                style={isDeath ? { textShadow: '0 0 6px rgba(254,202,202,0.6)' } : undefined}
+              >
+                {isDeath ? '☠ 契約' : '▲ 投資'}
+              </button>
+              <button
+                onClick={handleSell}
+                disabled={holdings[selectedStock] <= 0}
+                className={`py-5 font-black tracking-widest text-base disabled:bg-zinc-800 disabled:text-zinc-600 ${
+                  isDeath
+                    ? 'bg-black active:bg-zinc-900 text-red-500 border border-red-700'
+                    : 'bg-red-500 active:bg-red-600 text-zinc-950'
+                }`}
+                style={isDeath && holdings[selectedStock] > 0 ? { textShadow: '0 0 6px rgba(220,38,38,0.6)' } : undefined}
+              >
+                {isDeath ? '🔪 解放' : '▼ 売却'}
+              </button>
+            </div>
+          </div>
+
+          {/* スワイプヒント */}
+          {!newsPanelOpen && (
+            <div className="absolute right-0 top-1/2 -translate-y-1/2 text-zinc-700 text-[9px] pr-1" style={{ writingMode: 'vertical-rl' }}>
+              ← SWIPE FOR NEWS
+            </div>
+          )}
+
+          {/* 強制ニューストースト */}
+          {toast && (
+            <div
+              className="fixed top-3 left-3 right-3 z-40 pointer-events-auto"
+              onClick={() => setToast(null)}
+              style={{ animation: 'toastIn 0.3s ease-out' }}
+            >
+              <div className={`p-3 border-l-4 backdrop-blur-md shadow-2xl ${
+                toast.isMarket
+                  ? (toast.positive ? 'bg-emerald-950/95 border-emerald-400' : 'bg-red-950/95 border-red-500')
+                  : toast.positive ? 'bg-zinc-900/95 border-emerald-400' : 'bg-zinc-900/95 border-red-500'
+              }`}>
+                <div className="flex items-start gap-2">
+                  <div className="flex-1 min-w-0">
+                    <div className={`text-[9px] tracking-widest mb-1 ${toast.positive ? 'text-emerald-400' : 'text-red-400'}`}>
+                      {toast.isMarket ? '// MARKET ALERT' : '// BREAKING NEWS'}
+                    </div>
+                    <div className="text-xs text-zinc-100 leading-relaxed">
+                      {toast.text}
+                    </div>
+                  </div>
+                  <span className="text-zinc-600 text-xs">✕</span>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ニュースサイドパネル */}
+          <div
+            className={`fixed inset-0 z-50 transition-opacity ${newsPanelOpen ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'}`}
+          >
+            <div
+              className="absolute inset-0 bg-black/60"
+              onClick={() => setNewsPanelOpen(false)}
+            />
+            <div
+              className={`absolute right-0 top-0 bottom-0 w-[85%] max-w-sm bg-zinc-950 border-l-2 border-amber-400 transition-transform ${newsPanelOpen ? 'translate-x-0' : 'translate-x-full'}`}
+            >
+              <div className="p-4 border-b border-zinc-800 flex justify-between items-center">
+                <div>
+                  <div className="text-[10px] tracking-widest text-amber-400">NEWS FEED</div>
+                  <div className="text-lg font-black">市場速報</div>
+                </div>
+                <button
+                  onClick={() => setNewsPanelOpen(false)}
+                  className="w-10 h-10 border-2 border-zinc-800 flex items-center justify-center text-zinc-400"
+                >
+                  ✕
+                </button>
+              </div>
+              <div className="p-4 space-y-2 overflow-y-auto" style={{ maxHeight: 'calc(100vh - 80px)' }}>
+                {news.length === 0 && (
+                  <div className="text-zinc-600 text-xs text-center py-8">市場の動きを待っています...</div>
+                )}
+                {news.map(n => (
+                  <div key={n.id} className={`text-xs p-3 border-l-2 ${n.isMarket ? 'border-amber-400 bg-amber-400/5' : n.positive ? 'border-emerald-400 bg-emerald-400/5' : 'border-red-500 bg-red-500/5'}`}>
+                    <div className="text-[10px] text-zinc-500 mb-1">TICK {n.tick}</div>
+                    <div className="text-zinc-200 leading-relaxed">{n.text}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ===== マウント =====
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<TradeGame />);
+
+    // ローディング非表示
+    const loading = document.getElementById('loading');
+    if (loading) loading.style.display = 'none';
+  </script>
+
+  <!-- グローバルエラー捕捉(画面に表示) -->
+  <script>
+    window.addEventListener('error', function(e) {
+      const loading = document.getElementById('loading');
+      if (loading && loading.style.display !== 'none') {
+        loading.innerHTML = '<div style="color:#ef4444;text-align:left;padding:20px;font-size:11px;line-height:1.6;font-family:monospace;max-width:90%;">' +
+          '<div style="color:#fbbf24;margin-bottom:10px;">// SYSTEM ERROR</div>' +
+          (e.message || String(e)) +
+          (e.filename ? '<br>at: ' + e.filename + ':' + e.lineno : '') +
+          '</div>';
+      }
+    });
+  </script>
+</body>
+</html>
