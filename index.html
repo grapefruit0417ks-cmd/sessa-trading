@@ -1067,13 +1067,76 @@
 
           {/* チャート */}
           <div className="px-2">
-            <SimpleChart
-              data={priceHistory}
-              dataKey={selectedStock}
-              color={stock.color}
-              refLine={holdings[selectedStock] > 0 && avgCost[selectedStock] > 0 ? avgCost[selectedStock] : null}
-              height={200}
-            />
+            {/* モード切替トグル */}
+            <div className="flex justify-end px-2 mb-1">
+              <div className="inline-flex border border-zinc-800 text-[9px] tracking-widest">
+                <button
+                  onClick={() => setChartMode('individual')}
+                  className={`px-2 py-1 ${chartMode === 'individual' ? 'bg-amber-400 text-zinc-950 font-bold' : 'text-zinc-500'}`}
+                >
+                  INDIVIDUAL
+                </button>
+                <button
+                  onClick={() => setChartMode('all')}
+                  className={`px-2 py-1 ${chartMode === 'all' ? 'bg-amber-400 text-zinc-950 font-bold' : 'text-zinc-500'}`}
+                >
+                  ALL
+                </button>
+              </div>
+            </div>
+
+            {chartMode === 'individual' ? (
+              <SimpleChart
+                data={priceHistory}
+                dataKey={selectedStock}
+                color={stock.color}
+                refLine={holdings[selectedStock] > 0 && avgCost[selectedStock] > 0 ? avgCost[selectedStock] : null}
+                height={180}
+              />
+            ) : (
+              <SimpleChart
+                data={priceHistory}
+                series={stockKeys
+                  .filter(k => !hiddenSeries[k])
+                  .map(k => ({
+                    key: k,
+                    color: activeStocks[k].color,
+                    highlight: k === selectedStock
+                  }))}
+                height={180}
+              />
+            )}
+
+            {/* 凡例(ALLモード時のみ) */}
+            {chartMode === 'all' && (
+              <div className="flex flex-wrap gap-1.5 px-2 mt-1.5">
+                {stockKeys.map(k => {
+                  const s = activeStocks[k];
+                  const hidden = hiddenSeries[k];
+                  const isSelected = k === selectedStock;
+                  return (
+                    <button
+                      key={k}
+                      onClick={() => setHiddenSeries(prev => ({ ...prev, [k]: !prev[k] }))}
+                      className={`flex items-center gap-1.5 px-2 py-1 border text-[10px] transition-all ${
+                        hidden ? 'border-zinc-800 opacity-40' : isSelected ? 'border-amber-400' : 'border-zinc-700'
+                      }`}
+                    >
+                      <span
+                        className="w-2 h-2 rounded-full"
+                        style={{ backgroundColor: hidden ? '#3f3f46' : s.color }}
+                      />
+                      <span className={hidden ? 'text-zinc-600 line-through' : 'text-zinc-300'}>
+                        {s.ticker}
+                      </span>
+                      <span className={`tabular-nums ${hidden ? 'text-zinc-700' : 'text-zinc-500'}`}>
+                        ¥{prices[k].toFixed(0)}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </div>
 
           <div className="flex-1" />
